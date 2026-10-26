@@ -1,0 +1,12 @@
+node_modules
+dist
+.DS_Store
+*.local
+tests/_*.mjs
+android/app/build
+dist-artifact
+# Se generan al compilar (scripts/soundfonts.mjs)
+.cache
+public/soundfont/MuseScore_General.sf3
+public/soundfont/MuseScore_General-LICENSE.md
+public/soundfont/banks.json
