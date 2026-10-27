@@ -649,6 +649,11 @@ async function boot() {
     await openSong(id);
   }
   // Web y APK: pide entrar (se puede seguir sin cuenta). Artefacto: la cuenta de Claude basta.
+  await cloud.ready; // sesión guardada, o la que trae la vuelta de Google
+  cloud.onSession = (s) => {
+    setSync();
+    if (s && document.querySelector('.sheet form.login')) { sheets.close(); toast(`Hola, ${s.username}.`); sheets.library(); }
+  };
   if (!ARTIFACT && !cloud.session && !PREFS.offline) sheets.login(true);
   else if (!last) sheets.library();
   else toast(inputMode === "pad" ? "Toca la tablatura y escribe con el teclado de abajo. → avanza." : "Toca la tablatura y escribe trastes con tu teclado. Espacio avanza.");

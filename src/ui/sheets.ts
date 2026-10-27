@@ -7,6 +7,7 @@ import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
 import { kindOf, fxMap, masterOf, drumKit, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { Capacitor } from "@capacitor/core";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
@@ -416,7 +417,7 @@ export class Sheets {
       : cloud.session ? `Entraste como ${cloud.session.username}${cloud.session.isAdmin ? " (administrador)" : ""}.` : "Sin cuenta: lo que escribas queda solo en este dispositivo.";
     const account = h("div", { class: "inline" },
       h("span", { class: "note", style: "flex:1;min-width:180px" }, who),
-      !claudeLib && cloud.session?.isAdmin ? h("button", { class: "ghost", onclick: () => this.users() }, "Usuarios") : null,
+      !claudeLib && cloud.session?.isAdmin ? h("button", { class: "ghost", onclick: () => this.users() }, "Cuentas") : null,
       !claudeLib && cloud.session ? h("button", { class: "ghost", onclick: async () => { await cloud.logout(); this.login(); } }, "Cerrar sesión") : null,
       !claudeLib && !cloud.session ? h("button", { class: "primary", onclick: () => this.login() }, "Entrar") : null);
 
@@ -454,6 +455,19 @@ export class Sheets {
         this.c.toast("Se subió a tu biblioteca.");
       } }, icon("up", 18)) : null))
       : [h("p", { class: "note" }, "Nada guardado solo en este dispositivo.")]));
+    if (cloud.session && !claudeLib && onDevice.length > 1) local.append(h("button", { class: "ghost", onclick: async (ev: Event) => {
+      const b = ev.currentTarget as HTMLButtonElement; b.disabled = true;
+      const { fromJson } = await import("../score/model");
+      let n = 0;
+      for (const e of onDevice) {
+        const json = loadLocalDoc(e.id);
+        if (!json) continue;
+        try { const sc = fromJson(json); await cloud.createMine(sc.title || e.title, json); forgetSong(e.id); n++; b.textContent = `Subiendo… ${n}/${onDevice.length}`; }
+        catch (err) { this.c.toast((err as Error).message, true); break; }
+      }
+      this.c.toast(`${n} ${n === 1 ? "canción subida" : "canciones subidas"} a tu biblioteca.`);
+      this.library();
+    } }, `Subir las ${onDevice.length} a mi biblioteca`));
 
     this.open("Biblioteca", "full", account, actions,
       h("div", { class: "sec" }, h("h3", null, claudeLib ? "Mis canciones" : cloud.session ? "Mis canciones (en la nube)" : "Mis canciones"), mine),
@@ -488,73 +502,83 @@ export class Sheets {
   /** Pantalla de acceso. `gate` la deja sin botón de cerrar (al arrancar). */
   async login(gate = false) {
     const { cloud } = this.c;
-    const user = h("input", { type: "text", id: "lg-user", autocomplete: "username", "aria-label": "Usuario", placeholder: "Usuario" });
+    const user = h("input", { type: "email", id: "lg-user", autocomplete: "username", "aria-label": "Correo", placeholder: "tu@correo.com" });
     const pass = h("input", { type: "password", id: "lg-pass", autocomplete: "current-password", "aria-label": "Contraseña", placeholder: "Contraseña" });
     const msg = h("p", { class: "progress", "aria-live": "polite" });
     const go = h("button", { class: "primary" }, "Entrar");
-    const offline = h("button", { class: "ghost", onclick: () => { this.c.prefs.offline = true; this.c.savePrefs(); this.close(); this.library(); } }, "Usar sin cuenta");
+    const offline = h("button", { type: "button", class: "ghost", onclick: () => { this.c.prefs.offline = true; this.c.savePrefs(); this.close(); this.library(); } }, "Usar sin cuenta");
+    const native = Capacitor.isNativePlatform();
+    const google = h("button", { type: "button", class: "google", onclick: async () => {
+      if (native) { msg.textContent = "En la app de Android, entra con correo y contraseña. Con Google, entra desde la página web (pronto también aquí)."; return; }
+      msg.textContent = "Abriendo Google…";
+      try { this.c.prefs.offline = false; this.c.savePrefs(); await cloud.loginGoogle(); } catch (err) { msg.textContent = (err as Error).message; }
+    } }, h("span", { class: "g" }, "G"), "Entrar con Google");
+    const forgot = h("button", { type: "button", class: "linkbtn", onclick: async () => {
+      if (!user.value.includes("@")) { msg.textContent = "Escribe tu correo arriba y vuelve a tocar «Olvidé mi contraseña»."; user.focus(); return; }
+      try { await cloud.resetPassword(user.value); msg.textContent = "Te mandamos un correo para crear una contraseña nueva."; } catch (err) { msg.textContent = (err as Error).message; }
+    } }, "Olvidé mi contraseña");
     const form = h("form", { class: "login", onsubmit: async (e: Event) => {
       e.preventDefault();
       go.disabled = true; msg.textContent = "Entrando…";
       try {
-        if (setup) await cloud.setupAdmin(user.value, pass.value); else await cloud.login(user.value, pass.value);
+        await cloud.login(user.value, pass.value);
         this.c.prefs.offline = false; this.c.savePrefs();
         this.close();
         this.c.toast(`Hola, ${cloud.session!.username}.`);
         this.library();
       } catch (err) { msg.textContent = (err as Error).message; }
       go.disabled = false;
-    } }, h("div", { class: "field" }, h("label", { for: "lg-user" }, "Usuario"), user), h("div", { class: "field" }, h("label", { for: "lg-pass" }, "Contraseña"), pass), h("div", { class: "inline" }, go, offline), msg);
-    const intro = h("p", { class: "note" }, "Entra con la cuenta que te dio el administrador para ver tu biblioteca en cualquier dispositivo.");
-    this.open("MusicFees", gate ? "gate" : "full", h("img", { src: `${import.meta.env.BASE_URL}icons/icon-192.png`, alt: "", class: "login-logo" }), intro, form);
-    let setup = false;
-    try {
-      setup = await cloud.needSetup();
-      if (setup) { intro.textContent = "Primera vez: crea la cuenta de administrador. Con ella después creas las cuentas de los demás (por ejemplo USUARIO 1)."; go.textContent = "Crear administrador"; pass.setAttribute("autocomplete", "new-password"); }
-    } catch (e) { msg.textContent = (e as Error).message; }
+    } }, h("div", { class: "field" }, h("label", { for: "lg-user" }, "Correo"), user), h("div", { class: "field" }, h("label", { for: "lg-pass" }, "Contraseña"), pass),
+      h("div", { class: "inline" }, go, offline), forgot, msg);
+    const intro = h("p", { class: "note" }, "Entra con tu cuenta para guardar tu música en la nube y abrirla en cualquier dispositivo. Si no tienes cuenta, crea una con Google o pídela al administrador.");
+    this.open("MusicFees", gate ? "gate" : "full", h("img", { src: `${import.meta.env.BASE_URL}icons/icon-192.png`, alt: "", class: "login-logo" }), intro, google, h("p", { class: "or" }, "o con tu correo"), form);
     user.focus();
   }
 
   /** Administración de cuentas (solo administradores). */
   async users() {
     const { cloud } = this.c;
-    const list = h("div", { class: "trlist" });
-    const nu = h("input", { type: "text", id: "nu-user", placeholder: "USUARIO 1", "aria-label": "Usuario nuevo" });
-    const np = h("input", { type: "text", id: "nu-pass", placeholder: "Contraseña (mínimo 4)", "aria-label": "Contraseña nueva" });
+    const list = h("div", { class: "trlist" }, h("p", { class: "note" }, "Cargando…"));
+    const ne = h("input", { type: "email", id: "nu-email", placeholder: "correo@ejemplo.com", "aria-label": "Correo de la cuenta nueva" });
+    const nn = h("input", { type: "text", id: "nu-name", placeholder: "Nombre (opcional)", "aria-label": "Nombre" });
+    const np = h("input", { type: "text", id: "nu-pass", placeholder: "Contraseña (mínimo 6)", "aria-label": "Contraseña nueva" });
     const adm = h("input", { type: "checkbox", id: "nu-admin" });
     const msg = h("p", { class: "progress", "aria-live": "polite" });
+    const when = (t: string | null) => (t ? new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" }) : "nunca");
     const draw = async () => {
       try {
         const rows = await cloud.users();
         list.replaceChildren(...rows.map((u) => {
-          const pw = h("button", { class: "ghost", onclick: async () => {
-            const field = h("input", { type: "text", placeholder: "Nueva contraseña", "aria-label": `Nueva contraseña de ${u.username}` });
-            const ok = h("button", { class: "primary", onclick: async () => { try { await cloud.setPassword(u.id, field.value); msg.textContent = `Contraseña de ${u.username} cambiada.`; draw(); } catch (e) { msg.textContent = (e as Error).message; } } }, "Guardar");
-            pw.replaceWith(h("span", { class: "inline" }, field, ok));
+          const pw = u.provider === "email" ? h("button", { class: "ghost", onclick: async () => {
+            const field = h("input", { type: "text", placeholder: "Nueva contraseña", "aria-label": `Nueva contraseña de ${u.email}` });
+            const ok = h("button", { class: "primary", onclick: async () => { try { await cloud.setPassword(u.id, field.value); msg.textContent = `Contraseña de ${u.email} cambiada.`; draw(); } catch (e) { msg.textContent = (e as Error).message; } } }, "Guardar");
+            pw!.replaceWith(h("span", { class: "inline" }, field, ok));
             field.focus();
-          } }, "Contraseña");
-          const del = h("button", { class: "ibtn", "aria-label": `Borrar ${u.username}` }, icon("trash", 18));
+          } }, "Contraseña") : null;
+          const del = h("button", { class: "ibtn", "aria-label": `Borrar ${u.email}` }, icon("trash", 18));
           del.onclick = async () => {
-            if (!del.dataset.armed) { del.dataset.armed = "1"; del.style.background = "#e5484d"; msg.textContent = `Toca otra vez para borrar a ${u.username}. Sus canciones siguen abriendo por enlace.`; return; }
+            if (!del.dataset.armed) { del.dataset.armed = "1"; del.style.background = "#e5484d"; msg.textContent = `Toca otra vez para borrar la cuenta ${u.email}. Sus canciones quedan sin dueño (siguen abriendo por enlace).`; return; }
             try { await cloud.deleteUser(u.id); draw(); } catch (e) { msg.textContent = (e as Error).message; }
           };
           return h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
-            h("div", { class: "nm" }, h("b", null, u.username), h("small", null, `${u.is_admin ? "Administrador · " : ""}${u.songs} ${u.songs === 1 ? "canción" : "canciones"}`)),
-            h("span", { class: "acts" }, pw, u.username === cloud.session?.username ? null : del));
+            h("div", { class: "nm" }, h("b", null, u.name || u.email), h("small", null, `${u.email} · ${u.provider === "google" ? "Google" : "correo"}${u.is_admin ? " · administrador" : ""} · última entrada: ${when(u.last_sign_in_at)}`)),
+            h("span", { class: "acts" }, pw, u.id === cloud.session?.userId ? null : del));
         }));
-      } catch (e) { msg.textContent = (e as Error).message; }
+      } catch (e) { list.replaceChildren(h("p", { class: "note" }, (e as Error).message)); }
     };
-    this.open("Usuarios", "full",
+    this.open("Cuentas", "full",
       h("form", { class: "sec", onsubmit: async (e: Event) => {
         e.preventDefault();
-        try { await cloud.createUser(nu.value, np.value, adm.checked); msg.textContent = `Cuenta «${nu.value.trim()}» creada. Ya puede entrar.`; nu.value = np.value = ""; adm.checked = false; draw(); }
+        try { await cloud.createUser(ne.value, np.value, nn.value, adm.checked); msg.textContent = `Cuenta ${ne.value.trim()} creada. Ya puede entrar con ese correo y contraseña.`; ne.value = np.value = nn.value = ""; adm.checked = false; draw(); }
         catch (err) { msg.textContent = (err as Error).message; }
       } }, h("h3", null, "Nueva cuenta"),
-        h("div", { class: "field" }, h("label", { for: "nu-user" }, "Usuario"), nu),
+        h("div", { class: "field" }, h("label", { for: "nu-email" }, "Correo"), ne),
+        h("div", { class: "field" }, h("label", { for: "nu-name" }, "Nombre"), nn),
         h("div", { class: "field" }, h("label", { for: "nu-pass" }, "Contraseña"), np),
         h("label", { class: "inline", for: "nu-admin" }, adm, "También es administrador"),
         h("div", { class: "inline" }, h("button", { class: "primary" }, "Crear cuenta"), h("button", { type: "button", class: "ghost", onclick: () => this.library() }, "Volver a la biblioteca"))),
-      msg, h("div", { class: "sec" }, h("h3", null, "Cuentas"), list));
+      msg, h("p", { class: "note" }, "Quien prefiera puede crear su propia cuenta con «Entrar con Google» en la pantalla de acceso."),
+      h("div", { class: "sec" }, h("h3", null, "Cuentas"), list));
     draw();
   }
 

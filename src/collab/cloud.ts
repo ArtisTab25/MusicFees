@@ -39,28 +39,39 @@ export function loadLocalDoc(id: string): string | null {
   try { return localStorage.getItem(LOCAL_DOC(id)); } catch { return null; }
 }
 
-export interface Session { token: string; username: string; isAdmin: boolean }
-export interface UserRow { id: string; username: string; is_admin: boolean; created_at: string; songs: number }
-const SESSION_KEY = "mf:session";
-export function loadSession(): Session | null {
-  try { const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); return s?.token ? s : null; } catch { return null; }
-}
-function saveSession(s: Session | null) {
-  try { if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s)); else localStorage.removeItem(SESSION_KEY); } catch { /* nada */ }
-}
+export interface Session { userId: string; email: string; username: string; isAdmin: boolean; provider: string }
+export interface UserRow { id: string; email: string; name: string; is_admin: boolean; created_at: string; last_sign_in_at: string | null; provider: string }
 
+/** Nube: Supabase Auth (correo y contraseña, o Google) y biblioteca por usuario (003_supabase_auth.sql). */
 export class Cloud {
-  session: Session | null = loadSession();
+  session: Session | null = null;
   sb: SupabaseClient;
   ok = true;
+  /** Se resuelve cuando se sabe si hay sesión guardada (o al volver de entrar con Google). */
+  ready: Promise<void>;
+  onSession: (s: Session | null) => void = () => {};
   constructor() {
-    this.sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+    this.sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: !ARTIFACT, autoRefreshToken: !ARTIFACT, detectSessionInUrl: !ARTIFACT, flowType: "pkce" } });
+    this.ready = ARTIFACT ? Promise.resolve() : this.sb.auth.getSession().then(({ data }) => this.adopt(data.session?.user ?? null)).catch(() => {});
+    if (!ARTIFACT) this.sb.auth.onAuthStateChange((_e, sess) => { void this.adopt(sess?.user ?? null).then(() => this.onSession(this.session)); });
+  }
+  private async adopt(user: { id: string; email?: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> } | null) {
+    if (!user) { this.session = null; return; }
+    let isAdmin = false, name = String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? (user.email ?? "").split("@")[0]);
+    try {
+      const { data } = await this.sb.from("mf_profiles").select("is_admin, display_name").eq("id", user.id).maybeSingle();
+      if (data) { isAdmin = !!data.is_admin; name = data.display_name || name; }
+    } catch { /* sin perfiles todavía */ }
+    this.session = { userId: user.id, email: user.email ?? "", username: name, isAdmin, provider: String(user.app_metadata?.provider ?? "email") };
   }
   private explain(e: { message?: string; code?: string } | null): Error {
     const m = e?.message ?? "";
-    if (/mf_|function|schema cache|does not exist/i.test(m))
-      return new Error("La base de datos aún no está preparada. Ejecuta supabase/migrations/001_musicfees.sql en Supabase.");
-    if (/fetch|network|Failed/i.test(m)) return new Error("Sin conexión con la nube. Se guardó en este teléfono.");
+    if (/mf_profiles|owner_id|mf_claim_song|schema cache|does not exist/i.test(m))
+      return new Error("La base de datos todavía no tiene las cuentas nuevas. Aplica supabase/migrations/003_supabase_auth.sql en Supabase.");
+    if (/Invalid login credentials/i.test(m)) return new Error("Correo o contraseña incorrectos.");
+    if (/Email not confirmed/i.test(m)) return new Error("Falta confirmar el correo de esa cuenta.");
+    if (/provider is not enabled|Unsupported provider/i.test(m)) return new Error("La entrada con Google todavía no está activada en Supabase (Authentication → Providers → Google).");
+    if (/fetch|network|Failed/i.test(m)) return new Error("Sin conexión con la nube. Lo que escribas sigue guardándose en este teléfono.");
     return new Error(m || "Error de la nube");
   }
   async create(title: string, data: string): Promise<string> {
@@ -81,40 +92,55 @@ export class Cloud {
     if (error) throw this.explain(error);
     return Number(v);
   }
-  // ---------- cuentas (002_cuentas.sql) ----------
-  private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  // ---------- cuentas ----------
+  async login(email: string, pass: string) {
     if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
-    const { data, error } = await this.sb.rpc(fn, args);
+    const { data, error } = await this.sb.auth.signInWithPassword({ email: email.trim(), password: pass });
+    if (error) throw this.explain(error);
+    await this.adopt(data.user);
+    return this.session!;
+  }
+  /** Entrar o crear cuenta con Google: sale a Google y vuelve a la app con la sesión. */
+  async loginGoogle() {
+    if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
+    const redirectTo = location.origin + location.pathname;
+    const { error } = await this.sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
+    if (error) throw this.explain(error);
+  }
+  async resetPassword(email: string) {
+    const { error } = await this.sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: location.origin + location.pathname });
+    if (error) throw this.explain(error);
+  }
+  async logout() { this.session = null; await this.sb.auth.signOut().catch(() => {}); }
+  /** Administración (función de servidor mf-admin, solo administradores). */
+  private async admin<T>(body: Record<string, unknown>): Promise<T> {
+    const { data, error } = await this.sb.functions.invoke("mf-admin", { body });
     if (error) {
-      if (/function .*does not exist|schema cache|Could not find the function/i.test(error.message ?? "")) throw new Error("La base de datos todavía no tiene cuentas. Ejecuta supabase/migrations/002_cuentas.sql en Supabase.");
-      if (/sesión terminó/i.test(error.message ?? "")) { this.session = null; saveSession(null); }
-      throw this.explain(error);
+      const ctx = (error as { context?: Response }).context;
+      let msg = error.message;
+      try { const j = await ctx?.json(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      if (/not found|404|Failed to send/i.test(msg)) msg = "Falta publicar la función mf-admin en Supabase (supabase/functions/mf-admin).";
+      throw new Error(msg);
     }
     return data as T;
   }
-  private tok() { if (!this.session) throw new Error("Entra con tu cuenta primero."); return this.session.token; }
-  needSetup() { return this.rpc<boolean>("mf_need_setup", {}); }
-  private start(rows: { token: string; username: string; is_admin: boolean }[]) {
-    const r = rows[0];
-    this.session = { token: r.token, username: r.username, isAdmin: r.is_admin };
-    saveSession(this.session);
-    return this.session;
+  users() { return this.admin<UserRow[]>({ action: "list" }); }
+  createUser(email: string, pass: string, name: string, admin = false) { return this.admin<{ id: string }>({ action: "create", email, password: pass, name, admin }); }
+  setPassword(id: string, pass: string) { return this.admin<void>({ action: "password", id, password: pass }); }
+  deleteUser(id: string) { return this.admin<void>({ action: "delete", id }); }
+  // ---------- mi biblioteca ----------
+  async mySongs() {
+    const { data, error } = await this.sb.from("mf_songs").select("id, title, updated_at").eq("owner_id", this.session?.userId ?? "").order("updated_at", { ascending: false });
+    if (error) throw this.explain(error);
+    return data as { id: string; title: string; updated_at: string }[];
   }
-  async setupAdmin(user: string, pass: string) { return this.start(await this.rpc("mf_setup_admin", { p_user: user, p_pass: pass })); }
-  async login(user: string, pass: string) { return this.start(await this.rpc("mf_login", { p_user: user, p_pass: pass })); }
-  async logout() {
-    const t = this.session?.token;
-    this.session = null; saveSession(null);
-    if (t) await this.sb.rpc("mf_logout", { p_token: t }).then(() => {}, () => {});
+  async createMine(title: string, data: string) {
+    const { data: row, error } = await this.sb.from("mf_songs").insert({ title: title.slice(0, 120) || "Sin título", data, owner_id: this.session?.userId }).select("id").single();
+    if (error) throw this.explain(error);
+    return (row as { id: string }).id;
   }
-  users() { return this.rpc<UserRow[]>("mf_admin_users", { p_token: this.tok() }); }
-  createUser(user: string, pass: string, admin = false) { return this.rpc<string>("mf_admin_create_user", { p_token: this.tok(), p_user: user, p_pass: pass, p_admin: admin }); }
-  setPassword(id: string, pass: string) { return this.rpc<void>("mf_admin_set_password", { p_token: this.tok(), p_id: id, p_pass: pass }); }
-  deleteUser(id: string) { return this.rpc<void>("mf_admin_delete_user", { p_token: this.tok(), p_id: id }); }
-  mySongs() { return this.rpc<{ id: string; title: string; updated_at: string; size: number }[]>("mf_my_songs", { p_token: this.tok() }); }
-  createMine(title: string, data: string) { return this.rpc<string>("mf_create_my_song", { p_token: this.tok(), p_title: title, p_data: data }); }
-  claim(id: string) { return this.rpc<void>("mf_claim_song", { p_token: this.tok(), p_id: id }); }
-  deleteMine(id: string) { return this.rpc<void>("mf_delete_my_song", { p_token: this.tok(), p_id: id }); }
+  async claim(id: string) { const { error } = await this.sb.rpc("mf_claim_song", { p_id: id }); if (error) throw this.explain(error); }
+  async deleteMine(id: string) { const { error } = await this.sb.from("mf_songs").delete().eq("id", id); if (error) throw this.explain(error); }
 
   async list(ids: string[]) {
     if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
