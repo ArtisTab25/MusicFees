@@ -31,7 +31,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Compilar la web (sin bancos grandes: la app los descarga)
+      - name: "Compilar la web (sin bancos grandes, la app los descarga)"
         env:
           MF_APK: "1"
         run: |
