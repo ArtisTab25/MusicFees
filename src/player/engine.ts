@@ -18,6 +18,17 @@ export const setKitScore = (s: at.model.Score | null) => { kitScore = s; };
   };
 }
 
+// El dibujo corre en otro hilo: si la canción cambia mientras se dibuja (edición rápida), el mapa de
+// posiciones que vuelve apunta a tiempos que ya no existen y alphaTab lanza un error. Se descarta ese
+// mapa viejo; el siguiente dibujo (que ya viene en camino) trae el bueno.
+{
+  const BL = at.rendering.BoundsLookup as unknown as { fromJson(json: unknown, score: at.model.Score): unknown };
+  const orig = BL.fromJson;
+  BL.fromJson = function (json: unknown, score: at.model.Score) {
+    try { return orig.call(this, json, score); } catch { return null; }
+  };
+}
+
 /** Un tiempo del metrónomo: segundos desde el inicio, si es el primero del compás y cuántos tiene el compás. */
 export interface Beat { t: number; down: boolean; num: number }
 /** Convierte el orden de compases de alphaTab (con repeticiones) en tiempos reales usando los cambios de tempo del MIDI. */
@@ -102,7 +113,12 @@ export class Engine {
     s.player.scrollOffsetY = -40;
     this.api = new at.AlphaTabApi(el, s);
     this.api.renderFinished.on(() => this.emit("rendered"));
-    this.api.playerPositionChanged.on((e) => this.emit("position", e.currentTime, e.endTime, e.currentTick));
+    this.api.playerPositionChanged.on((e) => {
+      // Bucle de una parte con el motor de estudio: alphaTab no lo aplica ahí, se salta a mano.
+      const r = this.range;
+      if (r && this.fx && this.playing && (e.currentTick >= r.to - 2 || e.currentTick < r.from - 960)) this.jumpTick(r.from);
+      this.emit("position", e.currentTime, e.endTime, e.currentTick);
+    });
     this.api.playerStateChanged.on((e) => {
       this.playing = e.state === at.synth.PlayerState.Playing;
       this.emit("state", this.playing);
@@ -253,7 +269,7 @@ export class Engine {
     let armed = false, done = false, t = 0;
     let off: (() => void) | null = null;
     const finish = () => { done = true; off?.(); clearTimeout(t); this.pendingPlay = null; clearTimeout(this.reloadT); this.reloadT = window.setTimeout(() => { this.reloading = false; }, 600); };
-    const go = () => { if (!armed || done) return; finish(); this.reseek(); if (this.fx && this.toSec) this.fx.seek(this.toSec(this.lastTick) * 1000); this.api.play(); };
+    const go = () => { if (!armed || done) return; finish(); this.applyRange(); this.reseek(); if (this.fx && this.toSec) this.fx.seek(this.toSec(this.lastTick) * 1000); this.api.play(); };
     this.reloading = true;
     this.pendingPlay = finish; // un segundo toque antes de arrancar = cancelar
     off = this.api.playerReady.on(go) as unknown as () => void;
@@ -264,8 +280,46 @@ export class Engine {
   stop() { this.api.stop(); }
   set speed(v: number) { this.api.playbackSpeed = v; }
   get speed() { return this.api.playbackSpeed; }
-  set loop(v: boolean) { this.api.isLooping = v; }
+  set loop(v: boolean) { this.api.isLooping = v; if (!v) this.loopBars(null); }
   get loop() { return this.api.isLooping; }
+  /** Parte que se repite en bucle (ticks), o null para toda la canción. */
+  private range: { from: number; to: number; s: number; e: number } | null = null;
+  get loopRange() { return this.range ? { s: this.range.s, e: this.range.e } : null; }
+  /** Repite en bucle los compases s..e (null = quitar). Empieza a tocar desde s. */
+  loopBars(r: { s: number; e: number } | null) {
+    const score = this.api.score;
+    if (!r || !score) {
+      this.range = null;
+      try { this.api.playbackRange = null; } catch { /* sin reproductor */ }
+      return;
+    }
+    const mbs = score.masterBars;
+    const from = mbs[r.s]?.start ?? 0;
+    const last = mbs[Math.min(r.e, mbs.length - 1)];
+    const to = last.start + last.calculateDuration();
+    this.range = { from, to, s: r.s, e: r.e };
+    this.api.isLooping = true;
+    this.applyRange();
+    this.jumpTick(from);
+  }
+  /** Al recargar el MIDI alphaTab olvida el rango: se vuelve a poner (recalculado por si cambiaron los compases). */
+  private applyRange() {
+    const r = this.range, score = this.api.score;
+    if (!r || !score) return;
+    const mbs = score.masterBars;
+    if (r.s >= mbs.length) { this.range = null; return; }
+    const last = mbs[Math.min(r.e, mbs.length - 1)];
+    r.from = mbs[r.s].start; r.to = last.start + last.calculateDuration();
+    const pr = new at.synth.PlaybackRange();
+    pr.startTick = r.from; pr.endTick = r.to;
+    try { this.api.playbackRange = pr; } catch { /* sin reproductor */ }
+    if (this.lastTick < r.from || this.lastTick >= r.to) this.lastTick = r.from;
+  }
+  private jumpTick(tick: number) {
+    this.lastTick = tick;
+    if (this.fx && this.toSec) this.fx.seek(this.toSec(tick) * 1000);
+    try { this.api.tickPosition = tick; } catch { /* sin reproductor */ }
+  }
   // Con el motor de estudio, metrónomo y cuenta inicial los toca ese motor (alphaTab no suena).
   set metronome(v: number) { this.api.metronomeVolume = this.fx ? 0 : v; if (this.fx) this.fx.metronome = v; this.metro = v; }
   get metronome() { return this.metro; }
@@ -285,6 +339,16 @@ export class Engine {
     try {
       this.api.tickPosition = beat.absolutePlaybackStart;
     } catch { /* aún sin reproductor */ }
+  }
+  /** Modo ahorro: sin animación del cursor ni resaltado de notas al tocar, desplazamiento por página. */
+  saver = false;
+  setSaver(on: boolean) {
+    this.saver = on;
+    const p = this.api.settings.player;
+    p.enableAnimatedBeatCursor = !on;
+    p.enableElementHighlighting = !on;
+    p.scrollMode = on ? at.ScrollMode.OffScreen : at.ScrollMode.Continuous;
+    this.api.updateSettings();
   }
   /** Oír cada nota al escribirla (preferencia del editor). */
   hearNotes = true;

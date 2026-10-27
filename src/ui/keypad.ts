@@ -14,6 +14,9 @@ export interface KeypadHooks {
   toast: (m: string) => void;
   /** Abre la lista de patrones de rasgueo. */
   strums: () => void;
+  /** Hojas de la selección: técnica en bloque y cambio de métrica. */
+  tech: () => void;
+  meter: () => void;
   /** Diapasón al revés (zurdos). */
   lefty: () => boolean;
 }
@@ -101,6 +104,10 @@ export function buildKeypad(ed: Editor, hooks: KeypadHooks) {
       { label: "Pegar insertando", aria: "Pegar abriendo compases nuevos", act: () => say(ed.paste(true)), cls: "txt small" },
       { label: "Duplicar", aria: "Duplicar los compases seleccionados", act: () => say(ed.duplicate()), cls: "txt small" },
       { label: "Borrar compases", aria: "Borrar los compases seleccionados", act: () => say(ed.deleteBars()), cls: "txt small del" }],
+    [{ label: "Técnica…", aria: "Aplicar una técnica a toda la selección", act: () => hooks.tech(), cls: "txt small" },
+      { label: "Doble tiempo", aria: "Doble tiempo: todo dura la mitad", act: () => say(ed.scaleTime(0.5)), cls: "txt small" },
+      { label: "Mitad de tiempo", aria: "Mitad de tiempo: todo dura el doble", act: () => say(ed.scaleTime(2)), cls: "txt small" },
+      { label: "Métrica…", aria: "Cambiar la métrica de estos compases", act: () => hooks.meter(), cls: "txt small" }],
   ];
   const info = h("div", { class: "pinfo", "aria-live": "polite" });
   let drawn = "";
@@ -109,8 +116,8 @@ export function buildKeypad(ed: Editor, hooks: KeypadHooks) {
     const which = ed.selecting || ed.sel ? "sel" : kindOf(ed.track) === "tab" ? (fretMode ? "fret" : "tab") : "other";
     if (which === "sel") {
       const n = ed.selectedCount, clip = ed.clip;
-      const what = ed.sel?.all ? `${n} compás${n === 1 ? "" : "es"} en todas las pistas` : `${n} tiempo${n === 1 ? "" : "s"} seleccionado${n === 1 ? "" : "s"}`;
-      info.textContent = `${what} · toca otro tiempo para extender${clip ? ` · en el portapapeles: ${clip.whole ? `${clip.bars.length} compás${clip.bars.length > 1 ? "es" : ""}` : "tiempos"} de ${clip.from}` : ""}`;
+      const what = ed.sel?.all ? `${n} ${n === 1 ? "compás" : "compases"} en todas las pistas` : `${n} tiempo${n === 1 ? "" : "s"} seleccionado${n === 1 ? "" : "s"}`;
+      info.textContent = `${what} · toca otro tiempo para extender${clip ? ` · en el portapapeles: ${clip.whole ? `${clip.bars.length} ${clip.bars.length > 1 ? "compases" : "compás"}` : "tiempos"} de ${clip.from}` : ""}`;
     }
     if (which !== drawn) {
       drawn = which;

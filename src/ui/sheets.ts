@@ -6,13 +6,14 @@ import type { KeyInput } from "../editor/keys";
 import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
-import { kindOf, fxMap, masterOf, drumKit, metaMap, trackJson, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { kindOf, fxMap, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { Capacitor } from "@capacitor/core";
 import { addVersion, deleteTrash, deleteVersion, trash, trashList, versions } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
 import { STRUMS } from "../score/strum";
+import { ordered } from "../score/clip";
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
 import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
@@ -394,10 +395,17 @@ export class Sheets {
         ...([["Redonda", 1], ["Blanca", 2], ["Negra", 4], ["Corchea", 8], ["Semicorchea", 16], ["Fusa", 32]] as [string, number][]).map(([n, d]) => item(n, "", close(() => ed.setDuration(d)))),
         item("Puntillo", ".", close(() => ed.toggleDot())), item("Tresillo", ",", close(() => ed.toggleTuplet(3))),
       ],
-      Sección: ["Intro", "Verso", "Pre-coro", "Coro", "Puente", "Solo", "Outro"].map((n) => item(n, "Marca desde este compás", close(() => {
-        const letter = String.fromCharCode(65 + ed.score.masterBars.filter((m, i) => m.section && i < ed.cursor.b).length);
-        ed.barProp("section", `${letter}|${n}`);
-      }))),
+      Sección: [
+        item("Secciones de la canción", "Ir, bucle, duplicar, mover, borrar", () => this.sectionsSheet()),
+        item("Doble tiempo", "Selección o compás: todo dura la mitad", close(() => this.c.toast(ed.scaleTime(0.5)))),
+        item("Mitad de tiempo", "Selección o compás: todo dura el doble", close(() => this.c.toast(ed.scaleTime(2)))),
+        item("Cambiar métrica", "Reacomoda las notas de un rango", () => this.meterSheet()),
+        item("Técnica en la selección", "Palm mute, staccato, acento…", () => this.techSheet()),
+        ...["Intro", "Verso", "Pre-coro", "Coro", "Puente", "Solo", "Outro"].map((n) => item(n, "Marca desde este compás", close(() => {
+          const letter = String.fromCharCode(65 + ed.score.masterBars.filter((m, i) => m.section && i < ed.cursor.b).length);
+          ed.barProp("section", `${letter}|${n}`);
+        }))),
+      ],
       Herramientas: [
         item("Biblioteca de acordes", "Diagramas e inserción", () => this.chords()),
         item("Patrones de rasgueo", "Reparte el acorde con un ritmo", () => this.strumSheet()),
@@ -408,7 +416,14 @@ export class Sheets {
       Sonido: [
         item(engine.metronome > 0 ? "Apagar metrónomo" : "Encender metrónomo", "", close(() => (engine.metronome = engine.metronome > 0 ? 0 : 1))),
         item(engine.countIn > 0 ? "Quitar cuenta inicial" : "Cuenta inicial", "Un compás antes de tocar", close(() => (engine.countIn = engine.countIn > 0 ? 0 : 1))),
-        item(engine.loop ? "Quitar bucle" : "Bucle", "", close(() => (engine.loop = !engine.loop))),
+        item(engine.loop ? "Quitar bucle" : "Bucle", engine.loopRange ? `Compases ${engine.loopRange.s + 1}–${engine.loopRange.e + 1}` : "Toda la canción", close(() => (engine.loop = !engine.loop))),
+        item("Bucle de la selección", ed.sel ? "Los compases seleccionados" : `El compás ${ed.cursor.b + 1}`, close(() => {
+          const t = ed.sel ? ordered(ed.sel) : null;
+          const r = { s: t ? t.s.b : ed.cursor.b, e: t ? t.e.b : ed.cursor.b };
+          engine.loopBars(r); if (!engine.playing) engine.playPause();
+          this.c.toast(`Bucle: compás ${r.s + 1}${r.e > r.s ? `–${r.e + 1}` : ""}.`);
+        })),
+        item("Bucle por sección", "Elige Verso, Coro…", () => this.sectionsSheet()),
         item("Tempo", "Por compás, gradual, tap", () => this.tempo()),
         item("Masterizado", "EQ, compresión, ancho, volumen final", () => this.mastering()),
         item("Banco de sonidos", this.c.bank.name, () => this.banks()),
@@ -422,7 +437,7 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 0.9 y licencias", () => this.about()),
+        item("Acerca de MusicFees", "Versión 0.10 y licencias", () => this.about()),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -720,6 +735,73 @@ export class Sheets {
       h("div", { class: "menu-grid" }, STRUMS.map((p) => h("button", { onclick: () => { this.close(); this.c.toast(ed.strum(p)); } }, p.name, h("small", { class: "mono" }, `${p.ts}  ${show(p.grid)}`)))));
   }
 
+  // ---------- obra completa ----------
+  /** Secciones de la canción: ir, repetir en bucle, seleccionar, duplicar, mover, renombrar, borrar. */
+  sectionsSheet() {
+    const { ed, engine } = this.c;
+    const list = h("div", { class: "trlist" });
+    const draw = () => {
+      const secs = ed.sections, loop = engine.loopRange;
+      const cur = secs.findIndex((x) => ed.cursor.b >= x.b && ed.cursor.b <= x.e);
+      list.replaceChildren(...secs.map((x, k) => {
+        const looping = !!loop && loop.s === x.b && loop.e === x.e;
+        const btn = (label: string, aria: string, fn: () => void, cls = "ghost") => h("button", { class: cls, "aria-label": aria, onclick: fn }, label);
+        const say = (m: string) => { if (m) this.c.toast(m); draw(); };
+        const name = h("input", { type: "text", value: x.name, "aria-label": `Nombre de la sección ${k + 1}`, style: "max-width:9em" });
+        name.onchange = () => { ed.renameSection(k, name.value); draw(); };
+        const del = btn("Borrar", `Borrar la sección ${x.name}`, () => {
+          if (!del.dataset.armed) { del.dataset.armed = "1"; del.style.background = "#e5484d"; this.c.toast("Toca otra vez para borrar la sección (se puede deshacer)."); return; }
+          say(ed.deleteSection(k));
+        });
+        return h("div", { class: `tr${k === cur ? " on" : ""}`, style: "grid-template-columns:1fr", role: "group", "aria-label": x.name },
+          h("div", { class: "nm", onclick: () => { ed.gotoBar(x.b); this.close(); }, style: "cursor:pointer" },
+            h("b", null, `${x.marker ? `${x.marker} · ` : ""}${x.name}`), h("small", null, `Compás ${x.b + 1}${x.e > x.b ? `–${x.e + 1}` : ""} · ${x.e - x.b + 1} ${x.e > x.b ? "compases" : "compás"}${looping ? " · en bucle" : ""}`)),
+          h("div", { class: "inline", style: "flex-wrap:wrap;gap:6px" },
+            btn(looping ? "Quitar bucle" : "▶ Bucle", looping ? "Quitar el bucle" : `Tocar ${x.name} en bucle`, () => {
+              if (looping) { engine.loopBars(null); engine.loop = false; say("Bucle quitado: se toca toda la canción."); return; }
+              engine.loopBars({ s: x.b, e: x.e }); ed.gotoBar(x.b);
+              if (!engine.playing) engine.playPause();
+              say(`Tocando «${x.name}» en bucle.`);
+            }, looping ? "primary" : "ghost"),
+            btn("Seleccionar", `Seleccionar ${x.name} en todas las pistas`, () => { ed.selectSection(k); this.close(); this.c.toast(`«${x.name}» seleccionada: copia, transpón o aplica técnicas.`); }),
+            btn("Duplicar", `Duplicar ${x.name}`, () => say(ed.dupSection(k))),
+            btn("↑", `Mover ${x.name} antes`, () => say(ed.moveSection(k, -1))),
+            btn("↓", `Mover ${x.name} después`, () => say(ed.moveSection(k, 1))),
+            name, del));
+      }));
+    };
+    const marks = ["Intro", "Verso", "Pre-coro", "Coro", "Puente", "Solo", "Outro"].map((n) => h("button", { class: "ghost", onclick: () => {
+      const letter = String.fromCharCode(65 + ed.score.masterBars.filter((m, i) => m.section && i < ed.cursor.b).length);
+      ed.barProp("section", `${letter}|${n}`); draw();
+    } }, n));
+    this.open("Secciones", "full",
+      h("p", { class: "note" }, "Toca el nombre para ir. Las secciones se duplican, mueven y borran completas, en todas las pistas. Todo se puede deshacer."),
+      list,
+      h("div", { class: "sec" }, h("h3", null, `Marcar sección en el compás ${ed.cursor.b + 1}`), h("div", { class: "inline", style: "flex-wrap:wrap;gap:6px" }, ...marks)));
+    draw();
+  }
+  /** Aplica una técnica a toda la selección. */
+  techSheet() {
+    const { ed } = this.c;
+    const T: [NoteFx, string][] = [["palmMute", "Palm mute"], ["letRing", "Dejar sonar"], ["staccato", "Staccato"], ["accent", "Acento"], ["heavyAccent", "Acento fuerte"],
+      ["ghost", "Nota fantasma"], ["dead", "Apagada (x)"], ["vibrato", "Vibrato"], ["hammer", "Ligado (hammer/pull)"], ["slide", "Slide"], ["harmonic", "Armónico"]];
+    this.open("Técnica en la selección", "full",
+      h("p", { class: "note" }, ed.sel ? `Se aplica a todas las notas seleccionadas${ed.sel.all ? " en todas las pistas" : ""}. Si ya todas la tenían, se quita.` : "Primero selecciona notas o compases (mantén el dedo sobre un tiempo)."),
+      h("div", { class: "menu-grid" }, T.map(([fx, n]) => h("button", { disabled: !ed.sel, onclick: () => { this.close(); this.c.toast(ed.fxOnSelection(fx)); } }, n))));
+  }
+  /** Cambia la métrica de un rango y reacomoda las notas. */
+  meterSheet() {
+    const { ed } = this.c;
+    const t = ed.sel ? ordered(ed.sel) : null;
+    const s = t ? t.s.b : ed.cursor.b, e = t ? t.e.b : ed.cursor.b;
+    const custom = h("input", { type: "text", placeholder: "Ej. 7/8", "aria-label": "Métrica", style: "max-width:6em" });
+    const go = (ts: string) => { this.close(); this.c.toast(ed.changeMeter(ts)); };
+    this.open("Cambiar métrica", "full",
+      h("p", { class: "note" }, `Compás ${s + 1}${e > s ? `–${e + 1}` : ""}. Las notas de todas las pistas se reacomodan en la métrica nueva: lo que cruza la barra de compás se parte y se liga, y se agregan o quitan compases si hace falta. Para un rango, selecciónalo antes.`),
+      h("div", { class: "menu-grid" }, ["2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8"].map((ts) => h("button", { onclick: () => go(ts) }, ts))),
+      h("form", { class: "inline", onsubmit: (ev: Event) => { ev.preventDefault(); if (custom.value.trim()) go(custom.value.trim()); } }, custom, h("button", { class: "ghost" }, "Aplicar")));
+  }
+
   // ---------- instrumento MIDI ----------
   async midiToggle() {
     const { startMidi, stopMidi, midiOn } = await import("../editor/midiIn");
@@ -751,6 +833,12 @@ export class Sheets {
         toggle("pf-focus", "Modo enfocado", "Muestra solo la pista que estás escribiendo", !this.c.ed.viewAll, (v) => { this.c.ed.viewAll = !v; this.c.ed.rerender(); })),
       h("div", { class: "sec" }, h("h3", null, "Vista"),
         toggle("pf-cont", "Vista continua", "La partitura en una línea horizontal que avanza", prefs.layout === "h", (v) => { prefs.layout = v ? "h" : "p"; engine.setLayout(!v); })),
+      h("div", { class: "sec" }, h("h3", null, "Batería y calor"),
+        toggle("pf-saver", "Modo ahorro", "Audio ligero, sin animar el cursor ni resaltar notas al tocar; la partitura avanza por página", prefs.saver === true, async (v) => {
+          prefs.saver = v; engine.setSaver(v);
+          if (engine.fx) { await this.c.setFx(false); await this.c.setFx(true); }
+          this.c.toast(v ? "Modo ahorro activado." : "Modo ahorro desactivado.");
+        })),
       h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "field" }, h("label", { for: "pf-q" }, "Calidad del motor de estudio"), quality),
         h("p", { class: "note" }, "La ligera quita el sobremuestreo de la distorsión, usa menos voces y una reverb más corta: suena casi igual y no se traba en teléfonos. Al exportar siempre se usa la alta.")));
   }
@@ -1114,7 +1202,7 @@ export class Sheets {
   }
   about() {
     this.open("Acerca de MusicFees", "full",
-      h("p", null, "MusicFees 0.9 — tablaturas y partituras multipista con edición en dúo."),
+      h("p", null, "MusicFees 0.10 — tablaturas y partituras multipista con edición en dúo."),
       h("p", { class: "note" }, "Partitura y reproducción: alphaTab (MPL-2.0). Fuente musical: Bravura (SIL OFL). Sonidos: MuseScore General de S. Christian Collins, basado en Fluid R3 de Frank Wen y Michael Cowgill (licencia MIT), y GeneralUser GS de S. Christian Collins (uso libre, también comercial). Motor de estudio: spessasynth_lib (Apache-2.0) y Tone.js (MIT). Nube: Supabase."));
   }
 }

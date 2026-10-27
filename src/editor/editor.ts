@@ -7,6 +7,7 @@ import {
 import type { Engine } from "../player/engine";
 import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, restsFor, saveClip, type Clip, type Selection } from "../score/clip";
 import { planStrum, type StrumPattern } from "../score/strum";
+import { planChangeMeter, planDeleteSection, planDupSection, planFxOnSelection, planMoveBars, planScaleTime, sections, type SectionBlock } from "../score/structure";
 
 type Score = at.model.Score;
 type Beat = at.model.Beat;
@@ -401,8 +402,8 @@ export class Editor {
     const clip = copy(this.score, this.target());
     saveClip(clip);
     const n = clip.bars.reduce((k, b) => k + b.length, 0);
-    if (clip.tracks) return `Copiado: ${clip.bars.length} compás${clip.bars.length > 1 ? "es" : ""} de todas las pistas.`;
-    return clip.whole ? `Copiado: ${clip.bars.length} compás${clip.bars.length > 1 ? "es" : ""} de ${clip.from}.` : `Copiado: ${n} tiempo${n > 1 ? "s" : ""} de ${clip.from}.`;
+    if (clip.tracks) return `Copiado: ${clip.bars.length} ${clip.bars.length > 1 ? "compases" : "compás"} de todas las pistas.`;
+    return clip.whole ? `Copiado: ${clip.bars.length} ${clip.bars.length > 1 ? "compases" : "compás"} de ${clip.from}.` : `Copiado: ${n} tiempo${n > 1 ? "s" : ""} de ${clip.from}.`;
   }
   cutSel(): string {
     const msg = this.copySel().replace("Copiado", "Cortado");
@@ -434,7 +435,7 @@ export class Editor {
     const n = clip.bars.length;
     this.clearSelection();
     this.setCursor({ b: e.b + 1, i: 0 });
-    return `Duplicado: ${n} compás${n > 1 ? "es" : ""}.`;
+    return `Duplicado: ${n} ${n > 1 ? "compases" : "compás"}.`;
   }
   /** Borra de la canción los compases seleccionados (en todas las pistas). */
   deleteBars(): string {
@@ -443,7 +444,81 @@ export class Editor {
     this.commit(planDeleteBars(this.score, t));
     this.clearSelection();
     this.setCursor({ b: Math.min(ordered(t).s.b, this.track.staves[0].bars.length - 1), i: 0 });
-    return `Se borraron ${n} compás${n > 1 ? "es" : ""}.`;
+    return `Se borraron ${n} ${n > 1 ? "compases" : "compás"}.`;
+  }
+  // ---------- obra completa: secciones como bloques ----------
+  get sections(): SectionBlock[] { return sections(this.score); }
+  gotoBar(b: number) { this.clearSelection(); this.setCursor({ b: Math.max(0, Math.min(b, this.score.masterBars.length - 1)), i: 0 }); }
+  /** Selecciona los compases de una sección en todas las pistas. */
+  selectSection(k: number) {
+    const s = this.sections[k];
+    if (!s) return;
+    const c = this.cursor, bars = this.track.staves[0].bars;
+    this.sel = { t: c.t, v: c.v, a: { b: s.b, i: 0 }, z: { b: s.e, i: bars[s.e].voices[c.v].beats.length - 1 }, all: true };
+    this.selecting = true;
+    this.setCursor({ b: s.b, i: 0 }, true);
+    this.emit();
+  }
+  dupSection(k: number): string {
+    const s = this.sections[k];
+    if (!s) return "";
+    this.commit(planDupSection(this.score, s.b, s.e));
+    this.gotoBar(s.e + 1);
+    return `Sección «${s.name}» duplicada (${s.e - s.b + 1} compases).`;
+  }
+  /** Mueve la sección un lugar antes (-1) o después (+1) de la sección vecina. */
+  moveSection(k: number, dir: -1 | 1): string {
+    const list = this.sections, s = list[k], o = list[k + dir];
+    if (!s || !o) return dir < 0 ? "Ya es la primera sección." : "Ya es la última sección.";
+    const plan = planMoveBars(this.score, s.b, s.e, dir < 0 ? o.b : o.e + 1);
+    if (!plan) return "";
+    this.commit(plan.ops);
+    this.gotoBar(plan.at);
+    return `«${s.name}» ahora va ${dir < 0 ? "antes" : "después"} de «${o.name}».`;
+  }
+  deleteSection(k: number): string {
+    const s = this.sections[k];
+    if (!s) return "";
+    this.commit(planDeleteSection(this.score, s.b, s.e));
+    this.gotoBar(s.b);
+    return `Se borró «${s.name}».`;
+  }
+  renameSection(k: number, name: string) {
+    const s = this.sections[k];
+    if (!s) return;
+    const n = name.trim();
+    this.commit([{ k: "barProp", b: s.b, prop: "section", val: n ? `${s.marker || n.slice(0, 1).toUpperCase()}|${n}` : null }]);
+  }
+  /** Compases que abarca la selección (o el del cursor). */
+  private range() { const t = this.target(), { s, e } = ordered(t); return { s: s.b, e: e.b, all: !!t.all, t: t.t }; }
+  /** Doble tiempo (0.5) o mitad de tiempo (2) en los compases seleccionados. */
+  scaleTime(factor: 0.5 | 2): string {
+    const r = this.range();
+    const { ops, lost } = planScaleTime(this.score, r.t, r.s, r.e, factor, r.all);
+    this.commit(ops);
+    this.clearSelection();
+    this.setCursor({ b: r.s, i: 0 });
+    const what = factor === 2 ? "Mitad de tiempo" : "Doble tiempo";
+    return `${what} en ${r.all ? "todas las pistas" : "esta pista"}, compás ${r.s + 1}${r.e > r.s ? `–${r.e + 1}` : ""}.${factor === 2 ? " Se agregaron compases para que quepa." : ""}${lost ? ` ${lost} nota${lost > 1 ? "s" : ""} ya no se podía${lost > 1 ? "n" : ""} acortar.` : ""}`;
+  }
+  /** Cambia la métrica de los compases seleccionados y reacomoda las notas de todas las pistas. */
+  changeMeter(ts: string): string {
+    const r = this.range();
+    const plan = planChangeMeter(this.score, r.s, r.e, ts);
+    if (!plan) return "Métrica no válida.";
+    this.commit(plan.ops);
+    this.clearSelection();
+    this.setCursor({ b: r.s, i: 0 });
+    const n = r.e - r.s + 1;
+    return `Compases ${r.s + 1}–${r.s + plan.bars} en ${ts}${plan.bars !== n ? ` (eran ${n}, ahora ${plan.bars})` : ""}.`;
+  }
+  /** Aplica una técnica a todas las notas seleccionadas (o la quita si todas la tenían). */
+  fxOnSelection(fx: NoteFx): string {
+    if (!this.sel) return "Selecciona primero las notas o compases.";
+    const { ops, notes, on } = planFxOnSelection(this.score, this.sel, fx);
+    if (!notes) return "La selección no tiene notas.";
+    this.commit(ops);
+    return `${on ? "Aplicado a" : "Quitado de"} ${notes} nota${notes > 1 ? "s" : ""}.`;
   }
   deleteSel() { this.commit(planClear(this.score, this.target())); }
   /** Transpone la selección; sin selección, toda la pista. */
@@ -494,7 +569,7 @@ export class Editor {
     if (ops.length) this.commit(ops);
     this.clearSelection();
     if (!done) return `No se aplicó: cada compás necesita un acorde escrito y compás de ${p.ts}.`;
-    return `«${p.name}» en ${done} compás${done === 1 ? "" : "es"}.${skipped ? ` ${skipped} sin acorde o con otro compás se dejaron igual.` : ""}`;
+    return `«${p.name}» en ${done} ${done === 1 ? "compás" : "compases"}.${skipped ? ` ${skipped} sin acorde o con otro compás se dejaron igual.` : ""}`;
   }
   /** Escribe un traste en una cuerda (diapasón táctil). Fila 0 = la cuerda más aguda. */
   fretOn(row: number, fret: number) {

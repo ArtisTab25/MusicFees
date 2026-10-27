@@ -282,3 +282,68 @@ test("rasgueo: reparte el acorde con el ritmo y llena el compás exacto", async 
   finishScore(s);
   assert.equal(s.tracks[0].staves[0].bars[0].voices[0].beats[0].notes.length, 1, "B = solo el bajo");
 });
+
+test("obra completa: secciones como bloques, doble/mitad de tiempo, métrica y técnica en bloque", async () => {
+  const st = await import("../src/score/structure");
+  const s = createSong("hard_rock", 6, "Obra");
+  const tr = s.tracks[0];
+  const low = rowToString(tr, 5);
+  // Un compás con cuatro negras (trastes 1..4) en el compás 2.
+  applyOp(s, { k: "fret", t: 0, b: 1, v: 0, i: 0, str: low, fret: 1 });
+  applyOp(s, { k: "dur", t: 0, b: 1, v: 0, i: 0, dur: 4 });
+  for (let i = 1; i < 4; i++) { applyOp(s, { k: "insBeat", t: 0, b: 1, v: 0, after: i - 1, dur: 4 }); applyOp(s, { k: "fret", t: 0, b: 1, v: 0, i, str: low, fret: i + 1 }); }
+  applyOp(s, { k: "barProp", b: 1, prop: "section", val: "A|Verso" });
+  applyOp(s, { k: "barProp", b: 3, prop: "section", val: "B|Coro" });
+  finishScore(s);
+  let secs = st.sections(s);
+  assert.deepEqual(secs.map((x) => [x.name, x.b, x.e]), [["Inicio", 0, 0], ["Verso", 1, 2], ["Coro", 3, 5]]);
+  const run = (ops: import("../src/score/model").Op[]) => { for (const op of ops) applyOp(s, op); finishScore(s); };
+  const frets = (b: number) => s.tracks[0].staves[0].bars[b].voices[0].beats.map((x) => x.notes.find((n) => n.string === low)?.fret ?? "-").join("");
+  // Duplicar el verso: 2 compases más, con su marca y notas, en todas las pistas.
+  run(st.planDupSection(s, 1, 2));
+  assert.equal(s.masterBars.length, 8);
+  assert.equal(frets(3), "1234");
+  assert.equal(s.masterBars[3].section?.text, "Verso");
+  assert.equal(s.tracks[3].staves[0].bars.length, 8, "todas las pistas crecen");
+  // Mover el coro (compases 5..7) antes del primer verso.
+  secs = st.sections(s);
+  const coro = secs.find((x) => x.name === "Coro")!;
+  const mv = st.planMoveBars(s, coro.b, coro.e, 1)!;
+  run(mv.ops);
+  assert.equal(mv.at, 1);
+  assert.deepEqual(st.sections(s).map((x) => x.name), ["Inicio", "Coro", "Verso", "Verso"]);
+  assert.equal(frets(4), "1234", "el verso se recorrió con sus notas");
+  // Borrar el segundo verso.
+  secs = st.sections(s);
+  run(st.planDeleteSection(s, secs[3].b, secs[3].e));
+  assert.equal(s.masterBars.length, 6);
+  // Mitad de tiempo del compás 5 (verso): las negras pasan a blancas y ocupan dos compases.
+  run(st.planScaleTime(s, 0, 4, 4, 2, false).ops);
+  assert.equal(s.masterBars.length, 7, "se agregó un compás");
+  assert.equal(frets(4), "12"); assert.equal(frets(5), "34");
+  assert.equal(s.tracks[0].staves[0].bars[4].voices[0].beats[0].duration, at.model.Duration.Half);
+  // Doble tiempo de vuelta: las blancas pasan a negras en el primer compás y el segundo queda en silencio.
+  run(st.planScaleTime(s, 0, 4, 5, 0.5, false).ops);
+  assert.equal(frets(4), "1234");
+  assert.equal(voiceUsed(s.tracks[0].staves[0].bars[4].voices[0]), barCapacity(s.masterBars[4]));
+  // 4/4 → 3/4: cuatro negras ocupan dos compases; la cuarta pasa al siguiente.
+  run(st.planChangeMeter(s, 4, 4, "3/4")!.ops);
+  assert.equal(s.masterBars[4].timeSignatureNumerator, 3);
+  assert.equal(frets(4), "123");
+  assert.equal(frets(5).startsWith("4"), true);
+  for (const b of [4, 5]) assert.equal(voiceUsed(s.tracks[0].staves[0].bars[b].voices[0]), barCapacity(s.masterBars[b]), `compás ${b + 1} lleno`);
+  // Una blanca que cruza la barra se parte y se liga.
+  const packed = st.pack([{ dur: 4, dots: 0, tup: 0, notes: [] }, { dur: 4, dots: 0, tup: 0, notes: [] }, { dur: 2, dots: 0, tup: 0, notes: [{ pitch: 40, str: 6, fret: 0, fx: [] }] }], () => 1920 * 3 / 2);
+  assert.equal(packed.length, 2);
+  assert.equal(packed[1][0].notes[0].fx.includes("tie"), true, "la segunda parte va ligada");
+  // Técnica en bloque: palm mute a todas las notas del compás 5; otra vez lo quita.
+  const sel = { t: 0, v: 0, a: { b: 4, i: 0 }, z: { b: 4, i: 2 } };
+  const on = st.planFxOnSelection(s, sel, "palmMute");
+  assert.equal(on.notes, 3); assert.equal(on.on, true);
+  run(on.ops);
+  assert.equal(s.tracks[0].staves[0].bars[4].voices[0].beats.every((b) => b.notes.every((n) => n.isPalmMute)), true);
+  assert.equal(st.planFxOnSelection(s, sel, "palmMute").on, false);
+  // Todo sigue exportándose a Guitar Pro.
+  const gp = new at.exporter.Gp7Exporter().export(s, settings);
+  assert.ok(gp.length > 1000);
+});

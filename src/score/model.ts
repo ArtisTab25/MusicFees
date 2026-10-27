@@ -407,9 +407,16 @@ function insertBar(score: Score, atIndex: number) {
         bar.keySignature = prev.keySignature;
         bar.keySignatureType = prev.keySignatureType;
       }
-      const v = new M.Voice();
-      bar.addVoice(v);
-      v.addBeat(newRestBeat(M.Duration.Whole));
+      // Mismas voces que el compás vecino (Guitar Pro trae hasta 4): si no, alphaTab no puede
+      // encadenar las voces de un compás al siguiente y falla al dibujar o al tocar.
+      const nv = Math.max(1, prev?.voices.length ?? st.bars[idx]?.voices.length ?? 1);
+      for (let k = 0; k < nv; k++) {
+        const v = new M.Voice();
+        bar.addVoice(v);
+        const r = newRestBeat(M.Duration.Whole);
+        if (k > 0) r.isEmpty = true;
+        v.addBeat(r);
+      }
       const list = st.bars.slice();
       list.splice(idx, 0, bar);
       per.set(st, list);
@@ -778,6 +785,9 @@ export function applyOp(score: Score, op: Op): Score {
       if (!bar) break;
       while (bar.voices.length <= op.v) {
         const v = new M.Voice();
+        const r = newRestBeat(M.Duration.Whole);
+        r.isEmpty = true;
+        v.addBeat(r);
         bar.addVoice(v);
       }
       const voice = bar.voices[op.v];
@@ -819,7 +829,22 @@ export function renumberIds(score: Score) {
         }
       }
 }
+/** Todos los compases de un pentagrama con el mismo número de voces (las que falten, vacías). */
+function evenVoices(score: Score) {
+  for (const tr of score.tracks) for (const st of tr.staves) {
+    let nv = 1;
+    for (const bar of st.bars) nv = Math.max(nv, bar.voices.length);
+    for (const bar of st.bars) while (bar.voices.length < nv) {
+      const v = new M.Voice();
+      const r = newRestBeat(M.Duration.Whole);
+      r.isEmpty = true;
+      v.addBeat(r);
+      bar.addVoice(v);
+    }
+  }
+}
 export function finishScore(score: Score) {
+  evenVoices(score);
   renumberIds(score);
   score.finish(settings);
 }

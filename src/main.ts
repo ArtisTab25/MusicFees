@@ -71,7 +71,7 @@ const fxTracks = () => {
   return ed.score.tracks.map((t) => ({ index: t.index, channels: [t.playbackInfo.primaryChannel, t.playbackInfo.secondaryChannel], fx: map[t.index] ?? null, mute: t.playbackInfo.isMute, solo: t.playbackInfo.isSolo }));
 };
 /** Calidad ligera del motor de estudio: automática en teléfonos (o la que elija el usuario). */
-const lightAudioPref = () => PREFS.audioQuality === "light" || (PREFS.audioQuality !== "high" && (Capacitor.isNativePlatform() || matchMedia("(pointer: coarse)").matches));
+const lightAudioPref = () => PREFS.audioQuality === "light" || PREFS.saver === true || (PREFS.audioQuality !== "high" && (Capacitor.isNativePlatform() || matchMedia("(pointer: coarse)").matches));
 /** Activa o apaga el motor con efectos. Usa el banco elegido, sin la adaptación para alphaTab. */
 async function setFx(on: boolean) {
   if (on === !!engine.fx) return;
@@ -98,6 +98,7 @@ async function setBank(id: string, onProgress: (pct: number) => void = () => {})
 }
 if (PREFS.layout === "h") engine.setLayout(false);
 engine.hearNotes = PREFS.hearNotes !== false;
+if (PREFS.saver) engine.setSaver(true);
 const ed = new Editor(createSong("blank_gtr", 8), engine);
 const keys = new KeyInput(ed, (m) => toast(m));
 const cloud = new Cloud();
@@ -141,7 +142,7 @@ const btnPad = tb("keypad", "Teclado de MusicFees", () => {
   if (inputMode === "kbd") setInputMode("pad");
   else showPad(!document.body.classList.contains("pad-on"));
 });
-const pad = buildKeypad(ed, { hide: () => showPad(false), toast: (m) => toast(m), strums: () => sheets.strumSheet(), lefty: () => PREFS.lefty === true });
+const pad = buildKeypad(ed, { hide: () => showPad(false), toast: (m) => toast(m), strums: () => sheets.strumSheet(), tech: () => sheets.techSheet(), meter: () => sheets.meterSheet(), lefty: () => PREFS.lefty === true });
 function showPad(on: boolean) {
   document.body.classList.toggle("pad-on", on);
   btnPad.setAttribute("aria-pressed", String(on));
@@ -490,7 +491,15 @@ engine.on("rendered", () => {
 });
 engine.on("ready", () => { refresh(); setSync(); if (pendingPlay) { pendingPlay = false; engine.playPause(); } });
 engine.on("loadProgress", (p) => { soundPct = p; if (p < 100) syncEl.textContent = `Sonidos ${p} %`; else syncEl.textContent = "Preparando sonidos…"; });
+// Modo ahorro: el cursor de edición no persigue cada tiempo; se pone donde quedó al pausar.
+let savedBeat: import("@coderline/alphatab").model.Beat | null = null;
+engine.on("state", (playing) => {
+  if (playing || !engine.saver || !savedBeat || savedBeat.voice.bar.staff.track.index !== ed.cursor.t) return;
+  ed.setCursor({ b: savedBeat.voice.bar.index, v: savedBeat.voice.index, i: savedBeat.index }, true);
+  drawCursor();
+});
 engine.on("beat", (b) => {
+  if (engine.saver) { savedBeat = b; return; }
   if (!engine.playing) return;
   const bar = b.voice.bar;
   if (b.voice.bar.staff.track.index === ed.cursor.t) {

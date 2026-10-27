@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.9** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 0.10** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,15 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Novedades 0.10 (fases 4 a 6)
+
+- **Escritura activa**: Repetir el tiempo anterior, Completar el compás, diapasón táctil (también para zurdos), patrones de rasgueo (pop, balada, cumbia, corrido, vals, reggae, funk…) e instrumento MIDI por USB/Bluetooth.
+- **Secciones** (Menú → Sección → Secciones de la canción): ir a cada parte, tocarla en bucle, seleccionarla, duplicarla, moverla antes o después, renombrarla o borrarla, siempre en todas las pistas y con deshacer.
+- **Obra completa** desde la barra de selección: doble tiempo, mitad de tiempo, cambio de métrica en un rango (reacomoda las notas: parte y liga lo que cruza la barra, agrega o quita compases) y técnica aplicada a toda la selección (palm mute, staccato, acentos, ligados…).
+- **Bucle** de la selección o de una sección, en el sonido básico y en el motor de estudio.
+- **Modo ahorro** (Vista → Preferencias): audio ligero, sin animar el cursor ni resaltar notas mientras suena, desplazamiento por página.
+- Correcciones: los compases nuevos traen las mismas voces que sus vecinos (las canciones de Guitar Pro tienen hasta 4 y alphaTab fallaba al dibujar); se descarta el mapa de posiciones viejo si se edita mientras se dibuja; «compases» bien escrito.
 
 ## Novedades 0.9
 
