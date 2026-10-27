@@ -12,6 +12,7 @@ import { addVersion, deleteTrash, deleteVersion, trash, trashList, versions } fr
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
+import { STRUMS } from "../score/strum";
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
 import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
@@ -399,6 +400,8 @@ export class Sheets {
       }))),
       Herramientas: [
         item("Biblioteca de acordes", "Diagramas e inserción", () => this.chords()),
+        item("Patrones de rasgueo", "Reparte el acorde con un ritmo", () => this.strumSheet()),
+        item("Instrumento MIDI", "Escribe tocando un teclado o guitarra MIDI", close(() => void this.midiToggle())),
         item("Letra", "Sílabas bajo las notas", () => this.lyrics()),
         item("Atajos de teclado", "Todo lo que puedes escribir", () => this.help()),
       ],
@@ -707,6 +710,26 @@ export class Sheets {
     draw();
   }
 
+  // ---------- rasgueos ----------
+  strumSheet() {
+    const { ed } = this.c;
+    const target = ed.sel ? "los compases seleccionados" : `el compás ${ed.cursor.b + 1}`;
+    const show = (g: string) => g.replace(/\./g, "·").split("").join(" ");
+    this.open("Patrones de rasgueo", "full",
+      h("p", { class: "note" }, `Se aplica a ${target}: toma el acorde escrito al inicio de cada compás y lo reparte con el ritmo. D = abajo, U = arriba, B = solo el bajo, X = apagado, · = sostener. Para varios compases, selecciónalos antes (⬚).`),
+      h("div", { class: "menu-grid" }, STRUMS.map((p) => h("button", { onclick: () => { this.close(); this.c.toast(ed.strum(p)); } }, p.name, h("small", { class: "mono" }, `${p.ts}  ${show(p.grid)}`)))));
+  }
+
+  // ---------- instrumento MIDI ----------
+  async midiToggle() {
+    const { startMidi, stopMidi, midiOn } = await import("../editor/midiIn");
+    if (midiOn()) { stopMidi(); this.c.toast("Instrumento MIDI desconectado."); return; }
+    try {
+      const names = await startMidi(this.c.ed, (m) => this.c.toast(m, true));
+      this.c.toast(names.length ? `Conectado: ${names.join(", ")}. Toca para escribir; al soltar avanza.` : "No encontré instrumentos MIDI. Conéctalo (USB u OTG en el teléfono) y vuelve a intentar.");
+    } catch (e) { this.c.toast((e as Error).message, true); }
+  }
+
   // ---------- preferencias del editor ----------
   prefsSheet() {
     const { prefs, engine } = this.c;
@@ -724,6 +747,7 @@ export class Sheets {
     this.open("Preferencias del editor", "full",
       h("div", { class: "sec" }, h("h3", null, "Escribir"),
         toggle("pf-hear", "Oír cada nota al escribirla", "Suena la nota o la pieza de batería al ponerla", prefs.hearNotes !== false, (v) => { prefs.hearNotes = v; engine.hearNotes = v; }),
+        toggle("pf-lefty", "Diapasón para zurdos", "Los trastes van de derecha a izquierda", prefs.lefty === true, (v) => { prefs.lefty = v; }),
         toggle("pf-focus", "Modo enfocado", "Muestra solo la pista que estás escribiendo", !this.c.ed.viewAll, (v) => { this.c.ed.viewAll = !v; this.c.ed.rerender(); })),
       h("div", { class: "sec" }, h("h3", null, "Vista"),
         toggle("pf-cont", "Vista continua", "La partitura en una línea horizontal que avanza", prefs.layout === "h", (v) => { prefs.layout = v ? "h" : "p"; engine.setLayout(!v); })),

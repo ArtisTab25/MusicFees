@@ -5,7 +5,8 @@ import {
   rowToString, stringToRow, toJson, metaMap, voiceUsed, type BeatRef, type Kind, type NoteFx, type Op,
 } from "../score/model";
 import type { Engine } from "../player/engine";
-import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, saveClip, type Clip, type Selection } from "../score/clip";
+import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, restsFor, saveClip, type Clip, type Selection } from "../score/clip";
+import { planStrum, type StrumPattern } from "../score/strum";
 
 type Score = at.model.Score;
 type Beat = at.model.Beat;
@@ -212,18 +213,18 @@ export class Editor {
 
   /** Espacio: avanza un tiempo; si el compás tiene lugar crea uno nuevo, si no pasa al siguiente compás. */
   advance() {
-    const c = this.cursor, voice = this.bar.voices[c.v], beat = this.beat!;
+    const c = this.cursor, voice = this.bar.voices[c.v];
     const ops: Op[] = [];
     if (c.i < voice.beats.length - 1) { this.nextBeatPlain(); return; }
     const cap = barCapacity(this.masterBar), used = voiceUsed(voice);
     if (used < cap - 1) {
-      const dur = fitDuration(beat.duration, cap - used);
+      const dur = fitDuration(this.curDur, cap - used); // la duración elegida se mantiene
       ops.push({ k: "insBeat", t: c.t, b: c.b, v: c.v, after: c.i, dur });
       this.commit(ops);
       this.setCursor({ i: c.i + 1 });
       return;
     }
-    this.gotoNextBar(beat.duration);
+    this.gotoNextBar(this.curDur);
   }
   /** Enter: siguiente compás (lo crea si es el último). */
   gotoNextBar(dur?: number) {
@@ -446,6 +447,61 @@ export class Editor {
   }
   deleteSel() { this.commit(planClear(this.score, this.target())); }
   /** Transpone la selección; sin selección, toda la pista. */
+  // ---------- escritura activa ----------
+  /** Repite el tiempo anterior: si el actual tiene notas, lo copia al siguiente; si está vacío,
+   *  copia aquí el anterior. Así se escriben ritmos repetidos con un solo botón. */
+  repeatPrev(): string {
+    const c = this.cursor;
+    const cur = this.beat;
+    if (!cur) return "";
+    let src: { b: number; i: number } | null = null;
+    if (cur.notes.length) src = { b: c.b, i: c.i };
+    else if (c.i > 0) src = { b: c.b, i: c.i - 1 };
+    else if (c.b > 0) { const pv = this.track.staves[0].bars[c.b - 1].voices[c.v]; if (pv?.beats.length) src = { b: c.b - 1, i: pv.beats.length - 1 }; }
+    if (!src) return "No hay un tiempo anterior que repetir.";
+    // Siempre como «tiempo suelto»: si el compás tenía un solo tiempo, la copia contaba como compás
+    // completo y al pegar reemplazaba el compás entero.
+    const clip = { ...copy(this.score, { t: c.t, v: c.v, a: src, z: src }), whole: false };
+    if (cur.notes.length) this.advance();
+    const at0 = { b: this.cursor.b, i: this.cursor.i };
+    this.commit(planPaste(this.score, c.t, c.v, at0, clip));
+    this.setCursor(at0);
+    return "";
+  }
+  /** Lo que le falta (positivo) o sobra (negativo) al compás del cursor, en ticks. */
+  get barGap() {
+    const voice = this.bar.voices[this.cursor.v];
+    return voice ? barCapacity(this.masterBar) - voiceUsed(voice) : 0;
+  }
+  /** Completa el compás con silencios. */
+  fillBar(): string {
+    const c = this.cursor, gap = this.barGap;
+    if (gap < 1) return gap < -1 ? "Este compás tiene de más: acorta o borra algún tiempo." : "El compás ya está completo.";
+    const voice = this.bar.voices[c.v];
+    const clip = copy(this.score, { t: c.t, v: c.v, a: { b: c.b, i: 0 }, z: { b: c.b, i: voice.beats.length - 1 } });
+    // Un compás vacío (un silencio) se llena desde cero.
+    const keep = voice.beats.length === 1 && voice.beats[0].isEmpty ? [] : clip.bars[0] ?? [];
+    const fill = restsFor(keep.length ? gap : barCapacity(this.masterBar));
+    this.commit([{ k: "setVoice", t: c.t, b: c.b, v: c.v, beats: [...keep, ...fill] }]);
+    return "Compás completado con silencios.";
+  }
+  /** Aplica un patrón de rasgueo a la selección o al compás del cursor. */
+  strum(p: StrumPattern): string {
+    if (this.kind !== "tab") return "Los rasgueos son para guitarras y bajos en tablatura.";
+    const t = this.sel ? this.sel.t : this.cursor.t;
+    const a = this.sel ? Math.min(this.sel.a.b, this.sel.z.b) : this.cursor.b, z = this.sel ? Math.max(this.sel.a.b, this.sel.z.b) : this.cursor.b;
+    const { ops, done, skipped } = planStrum(this.score, t, a, z, p);
+    if (ops.length) this.commit(ops);
+    this.clearSelection();
+    if (!done) return `No se aplicó: cada compás necesita un acorde escrito y compás de ${p.ts}.`;
+    return `«${p.name}» en ${done} compás${done === 1 ? "" : "es"}.${skipped ? ` ${skipped} sin acorde o con otro compás se dejaron igual.` : ""}`;
+  }
+  /** Escribe un traste en una cuerda (diapasón táctil). Fila 0 = la cuerda más aguda. */
+  fretOn(row: number, fret: number) {
+    this.setCursor({ row });
+    this.writeFret(fret);
+  }
+
   /** Transpone una pista completa (todas sus voces). */
   transposeTrack(t: number, semis: number): string {
     const tr = this.score.tracks[t];

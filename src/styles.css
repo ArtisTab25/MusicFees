@@ -302,3 +302,18 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .sw[aria-pressed="true"] { border-color: #fff; box-shadow: 0 0 0 2px var(--blue); }
 .menu-grid button.danger { color: var(--red); }
 .tr.locked { opacity: .85; }
+
+/* Escritura activa */
+.chip .meta .gap { color: var(--amber); font-weight: 700; }
+.pk.txt.small[aria-pressed="true"] { background: var(--amber); color: #15161c; }
+.fretboard { overflow-x: auto; padding: 6px 6px 2px; display: flex; flex-direction: column; gap: 3px; scrollbar-width: thin; }
+.fb-row { display: flex; gap: 3px; align-items: center; width: max-content; }
+.fb-name { width: 22px; flex: none; font-family: var(--f-mono); font-size: 12px; color: var(--muted-d); text-align: center; }
+.fb-num { width: 40px; flex: none; text-align: center; font-size: 10px; color: var(--muted-d); }
+.fb-num.mk { color: var(--amber); font-weight: 700; }
+.fb-cell { width: 40px; height: 30px; flex: none; border-radius: 6px; border: 1px solid var(--line); background: var(--btn); font-size: 10px; color: var(--muted-d); font-family: var(--f-mono); }
+.fb-cell.open { background: #2a2b35; }
+.fb-cell.on { background: var(--blue); color: #fff; border-color: var(--blue); }
+.mono { font-family: var(--f-mono); letter-spacing: .05em; }
+.prow.trow { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+.prow.trow .pk { height: 36px; font-size: 13px; }

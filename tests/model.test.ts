@@ -256,3 +256,29 @@ test("menú de pista: duplicar, pegar de otra canción y reafinar sin cambiar el
   const gp = new at.exporter.Gp7Exporter().export(s, settings);
   assert.ok(gp.length > 1000, "exporta a Guitar Pro");
 });
+
+test("rasgueo: reparte el acorde con el ritmo y llena el compás exacto", async () => {
+  const { planStrum, STRUMS } = await import("../src/score/strum");
+  const s = createSong("blank_gtr", 2, "Rasgueo");
+  const tr = s.tracks[0];
+  // Acorde de Mi mayor (fila 0 = cuerda aguda) en el primer tiempo del compás 1.
+  const shape = [0, 0, 1, 2, 2, 0];
+  shape.forEach((fret, row) => applyOp(s, { k: "fret", t: 0, b: 0, v: 0, i: 0, str: rowToString(tr, row), fret }));
+  finishScore(s);
+  const pop = STRUMS.find((p) => p.id === "pop")!;
+  const { ops, done, skipped } = planStrum(s, 0, 0, 1, pop);
+  assert.equal(done, 1, "aplica al compás con acorde");
+  assert.equal(skipped, 1, "salta el compás sin acorde");
+  for (const op of ops) applyOp(s, op);
+  finishScore(s);
+  const beats = s.tracks[0].staves[0].bars[0].voices[0].beats;
+  assert.equal(beats.length, 6, "D·DU·UDU = 6 golpes");
+  assert.equal(voiceUsed(s.tracks[0].staves[0].bars[0].voices[0]), barCapacity(s.masterBars[0]), "llena el compás exacto");
+  assert.equal(beats[0].notes.length, 6, "cada golpe trae el acorde completo");
+  assert.equal(beats[0].brushType, at.model.BrushType.BrushDown);
+  assert.equal(beats[2].brushType, at.model.BrushType.BrushUp);
+  const corrido = STRUMS.find((p) => p.id === "corrido")!;
+  for (const op of planStrum(s, 0, 0, 0, corrido).ops) applyOp(s, op);
+  finishScore(s);
+  assert.equal(s.tracks[0].staves[0].bars[0].voices[0].beats[0].notes.length, 1, "B = solo el bajo");
+});

@@ -141,7 +141,7 @@ const btnPad = tb("keypad", "Teclado de MusicFees", () => {
   if (inputMode === "kbd") setInputMode("pad");
   else showPad(!document.body.classList.contains("pad-on"));
 });
-const pad = buildKeypad(ed, { hide: () => showPad(false), toast: (m) => toast(m) });
+const pad = buildKeypad(ed, { hide: () => showPad(false), toast: (m) => toast(m), strums: () => sheets.strumSheet(), lefty: () => PREFS.lefty === true });
 function showPad(on: boolean) {
   document.body.classList.toggle("pad-on", on);
   btnPad.setAttribute("aria-pressed", String(on));
@@ -422,6 +422,13 @@ function openInput() {
   else keys.focus();
 }
 
+/** Duración aproximada en figuras (♩ = negra). */
+function gapText(ticks: number) {
+  const q = ticks / 960;
+  if (Math.abs(q - Math.round(q)) < 0.01) return `${Math.round(q)} ♩`;
+  if (Math.abs(q * 2 - Math.round(q * 2)) < 0.01) return `${Math.round(q * 2)} ♪`;
+  return `${Math.round(q * 4)} 𝅘𝅥𝅯`;
+}
 // ---------- refrescar indicadores ----------
 function refresh() {
   const sc = ed.score, tr = ed.track, beat = ed.beat;
@@ -431,10 +438,13 @@ function refresh() {
   chipName.replaceChildren(icon(kindIcon, 18), `${idx}. ${tr.name}`);
   const mb = ed.masterBar;
   const tempo = Math.round(ed.tempoHere);
+  // Aviso de compás incompleto o con de más (se completa desde el teclado: «Completar»).
+  const gap = ed.barGap;
   chipMeta.replaceChildren(
     h("span", null, `${ed.cursor.b + 1}/${sc.masterBars.length}`),
     h("span", { class: engine.soundReady ? "ok" : "" }, `● ${mb.timeSignatureNumerator}:${mb.timeSignatureDenominator}`),
     h("span", null, timeText),
+    ...(Math.abs(gap) > 1 && ed.beat && !(ed.bar.voices[ed.cursor.v].beats.length === 1 && ed.beat.isEmpty) ? [h("span", { class: "gap", title: gap > 0 ? "Al compás le falta tiempo" : "Al compás le sobra tiempo" }, gap > 0 ? `falta ${gapText(gap)}` : `sobra ${gapText(-gap)}`)] : []),
   );
   const n = ed.noteAtCursor();
   readout.replaceChildren(
