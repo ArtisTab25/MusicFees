@@ -9,3 +9,5 @@ dist-artifact
 .cache
 public/soundfont/MuseScore_General.sf3
 public/soundfont/MuseScore_General-LICENSE.md
+# Se copian al compilar desde node_modules/wam-community (scripts/wam.mjs)
+public/wam/community

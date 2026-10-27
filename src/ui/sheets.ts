@@ -7,7 +7,7 @@ import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
 import { kindOf, fxMap, masterOf, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
-import { WAM_CATALOG, pluginName } from "../player/wam";
+import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
@@ -236,7 +236,7 @@ export class Sheets {
       const err = engine.fx?.pluginErrors.get(i);
       const add = h("select", { "aria-label": "Agregar plugin", id: "plug-add" },
         h("option", { value: "" }, "+ Agregar plugin…"),
-        WAM_CATALOG.map((p) => h("option", { value: p.src }, `${p.name} — ${p.note}`)),
+        PLUGIN_CATS.map((c) => h("optgroup", { label: c }, WAM_CATALOG.filter((p) => p.cat === c).map((p) => h("option", { value: p.src }, `${p.name} — ${p.note}`)))),
         h("option", { value: "url" }, "Desde una dirección (WAM 2.0)…"));
       add.onchange = async () => {
         let src = add.value;
@@ -257,7 +257,8 @@ export class Sheets {
           h("button", { class: "ghost", onclick: () => this.pluginWindow(i, k) }, "Abrir"),
           h("button", { class: "ibtn", "aria-label": `Quitar ${r.name}`, onclick: () => setList(list.filter((_, j) => j !== k)) }, icon("trash", 18)))),
         ...(err ? [h("p", { class: "note", style: "color:var(--amber)" }, err)] : []),
-        list.length < 3 ? add : h("p", { class: "note" }, "Máximo 3 plugins por pista."));
+        list.length < 3 ? add : h("p", { class: "note" }, "Máximo 3 plugins por pista."),
+        h("button", { class: "ghost", onclick: () => this.pluginLibrary() }, "Biblioteca de plugins y direcciones"));
     };
     const draw = () => {
       drawPlugins();
@@ -363,7 +364,7 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 0.6 y licencias", () => this.about()),
+        item("Acerca de MusicFees", "Versión 0.7 y licencias", () => this.about()),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -456,7 +457,10 @@ export class Sheets {
     this.open("Biblioteca", "full", account, actions,
       h("div", { class: "sec" }, h("h3", null, claudeLib ? "Mis canciones" : cloud.session ? "Mis canciones (en la nube)" : "Mis canciones"), mine),
       h("div", { class: "sec" }, h("h3", null, "Solo en este dispositivo"), local),
-      h("div", { class: "sec" }, h("h3", null, "Pistas de muestra"), samples));
+      h("div", { class: "sec" }, h("h3", null, "Pistas de muestra"), samples),
+      h("div", { class: "sec" }, h("h3", null, "Plugins de efectos"),
+        h("p", { class: "note" }, `${WAM_CATALOG.length} plugins WAM 2.0 probados con MusicFees, con su dirección para usarlos aquí o en cualquier programa compatible.`),
+        h("button", { class: "ghost", onclick: () => this.pluginLibrary() }, "Abrir biblioteca de plugins")));
 
     // Lista de la cuenta
     try {
@@ -674,6 +678,40 @@ export class Sheets {
   }
 
   /** Ventana con la interfaz propia de un plugin WAM. Al cerrarla se guarda su estado en la canción. */
+  /** Biblioteca de plugins: cada uno con su dirección pública, para copiarla o agregarlo a la pista actual. */
+  pluginLibrary() {
+    const { ed } = this.c;
+    const t = ed.cursor.t, track = ed.score.tracks[t];
+    const copy = async (url: string) => {
+      try { await navigator.clipboard.writeText(url); this.c.toast("Dirección copiada."); }
+      catch { this.c.toast(url); }
+    };
+    const add = async (p: (typeof WAM_CATALOG)[number]) => {
+      const cur = fxMap(ed.score)[t] ?? { ...presetFx("clean")! };
+      const list = cur.plugins ?? [];
+      if (list.length >= 3) { this.c.toast("Esta pista ya tiene 3 plugins. Quita uno en Sets → Pista → Efectos.", true); return; }
+      ed.commit([{ k: "trackFx", t, fx: { ...cur, plugins: [...list, { src: p.src, name: p.name }] } }], { render: false });
+      if (!this.c.engine.fx) await this.c.setFx(true);
+      else this.c.engine.fx.setTrackFx(t, fxMap(ed.score)[t] ?? null);
+      this.c.toast(`«${p.name}» se agregó a ${track?.name || `la pista ${t + 1}`}. Ábrelo en Sets → Pista → Efectos.`);
+    };
+    const groups = PLUGIN_CATS.map((c) => h("details", { class: "plugcat", open: c === "Distorsión y amplis" },
+      h("summary", null, `${c} (${WAM_CATALOG.filter((p) => p.cat === c).length})`),
+      ...WAM_CATALOG.filter((p) => p.cat === c).map((p) => {
+        const url = publicPluginUrl(p.src);
+        return h("div", { class: "plugrow" },
+          h("div", { class: "plugtxt" }, h("b", null, p.name), h("small", null, `${p.note} · ${p.by} · ${p.license}${p.mb ? ` · ${p.mb} MB` : ""}`),
+            h("code", { class: "plugurl" }, url)),
+          h("div", { class: "inline" },
+            h("button", { class: "ghost", onclick: () => copy(url) }, "Copiar URL"),
+            h("button", { class: "primary", onclick: () => add(p) }, "Agregar")));
+      })));
+    this.open("Biblioteca de plugins", "full",
+      h("p", { class: "note" }, `«Agregar» lo pone en la pista actual (${track?.name || `pista ${t + 1}`}) y enciende el motor de estudio. Las direcciones sirven en cualquier anfitrión WAM 2.0. La primera vez que abres un plugin se descarga; necesita internet en la app de Android.`),
+      ...groups,
+      h("p", { class: "note" }, "Licencias y autores: wam/NOTICE.txt. Los plugins de la comunidad vienen del paquete wam-community 0.4.9 (Wimmics, Université Côte d'Azur, y Burns Audio)."));
+  }
+
   private async pluginWindow(t: number, k: number) {
     const { ed, engine } = this.c;
     const inst = engine.fx?.pluginInstances(t)[k];
@@ -842,7 +880,7 @@ export class Sheets {
   }
   about() {
     this.open("Acerca de MusicFees", "full",
-      h("p", null, "MusicFees 0.6 — tablaturas y partituras multipista con edición en dúo."),
+      h("p", null, "MusicFees 0.7 — tablaturas y partituras multipista con edición en dúo."),
       h("p", { class: "note" }, "Partitura y reproducción: alphaTab (MPL-2.0). Fuente musical: Bravura (SIL OFL). Sonidos: MuseScore General de S. Christian Collins, basado en Fluid R3 de Frank Wen y Michael Cowgill (licencia MIT), y GeneralUser GS de S. Christian Collins (uso libre, también comercial). Motor de estudio: spessasynth_lib (Apache-2.0) y Tone.js (MIT). Nube: Supabase."));
   }
 }

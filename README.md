@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.6** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 0.7** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -42,7 +42,7 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Masterizado** (menú → Sonido → Masterizado): EQ, compresión «pegamento», ancho estéreo, volumen final, limitador y recorte suave con techo de −0.8 dB, con medidor de nivel y presets (natural, rock, cálido, brillante, acústico, radio).
 - **Exportar MP3/WAV con efectos y masterizado**: cada pista se procesa por su cadena fuera de tiempo real y la mezcla pasa por el master. Tarda más que la exportación en seco.
 
-- **Plugins de terceros (WAM 2.0)** (Sets → Pista → Efectos → Plugins): hasta 3 plugins Web Audio Modules por pista, con su propia ventana de controles. Vienen incluidos Simple Distortion, Delay y Simple EQ de burns-audio (MIT, ver `public/wam/NOTICE.txt`), y se puede cargar cualquier otro WAM 2.0 por URL (el servidor del plugin debe permitir CORS). Los ajustes del plugin se guardan con la canción y también suenan al exportar.
+- **Plugins de terceros (WAM 2.0)**: hasta 3 por pista (Sets → Pista → Efectos → Plugins). **Biblioteca de plugins** (Biblioteca → Plugins de efectos, o el botón junto a los plugins de la pista): 30 plugins probados en MusicFees, por categoría (distorsión y amplis, dinámica, modulación, filtros y EQ, delay, reverb, afinación), cada uno con su dirección pública para copiarla y usarla aquí o en cualquier anfitrión WAM 2.0, y un botón para agregarlo a la pista actual. Tres viven en el repositorio (burns-audio, MIT); los otros 27 se copian al compilar desde el paquete npm `wam-community` 0.4.9 (`scripts/wam.mjs`, que además corrige una carpeta que le falta al paquete). La APK no los trae: los carga del sitio publicado la primera vez (necesita internet). En el artefacto de Claude van 25 (sin DistoMachine ni Microverb, por el límite de archivos). Autores y licencias en `public/wam/NOTICE.txt`: varios son GPL (Guitarix, Kapitonov), revísalo si algún día la app se distribuye con licencia cerrada. También se puede cargar cualquier otro WAM 2.0 por URL (su servidor debe permitir CORS).
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.

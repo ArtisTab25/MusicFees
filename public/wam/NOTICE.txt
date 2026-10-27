@@ -22,3 +22,33 @@ BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR P
 NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+------------------------------------------------------------------------------------------------
+Plugins de la comunidad (carpeta community/, copiada al compilar por scripts/wam.mjs)
+
+Tomados sin cambios del paquete npm wam-community 0.4.9 (https://github.com/boourns/wam-community),
+salvo una copia de utils/sdk dentro de utils/sdk-parammgr/src/sdk que el paquete necesita y no trae.
+
+Cada plugin es un programa aparte que MusicFees carga solo cuando el usuario lo elige. Sus licencias
+son las de sus autores:
+  Wimmics (Université Côte d'Azur / I3S) — Michel Buffa, Quentin Beauchet, Jerome Lebrun, Shihong Ren:
+  envolturas WAM y GUI. El código DSP Faust de cada plugin viene en su carpeta (.dsp) e indica su origen:
+    BigMuff, OverdriveRix, OscTube, GuitarAmpSim60s ......... Guitarix project (GPL)
+    TS9_Overdrive ........................................... Guitarix project (LGPL)
+    Kpp_fuzz, kppdistorder, deathgate ....................... Oleg Kapitonov (GPL-3.0)
+    greyhole ................................................ Julian Parker (GPL-2.0 o posterior)
+    kbverb .................................................. Corey Kereliuk (MIT)
+    SmoothDelay ............................................. Yann Orlarey (STK-4.3)
+    stonephaser ............................................. Jean Pierre Cimalando (CC0-1.0 o BSL-1.0)
+    WeirdPhaser, ThruZeroFlanger, DualPitchShifter,
+    StereoFreqShifter, blipper .............................. Oli Larkin (patches OWL / Rebel Technology)
+    OwlDirty, OwlShimmer .................................... Xavier Godart (patches OWL)
+    quadrafuzz, pingpongdelay, graphicEqualizer, sweetWah,
+    StereoEnhancer, disto_machine, temper ................... Michel Buffa y colaboradores
+  Burns Audio — reverb (Microverb): Tom Burns, MIT (texto arriba).
+  utils/sdk-parammgr: ver su archivo LICENSE.
+
+Donde dice GPL/LGPL, el código fuente del efecto es el archivo .dsp de su carpeta y el proyecto
+original indicado. Si MusicFees se distribuye bajo una licencia cerrada, conviene revisar estas
+licencias antes de incluir esos plugins en la app.

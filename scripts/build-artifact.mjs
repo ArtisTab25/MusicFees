@@ -19,6 +19,16 @@ for (const f of drop) rmSync(join(OUT, f), { force: true });
 renameSync(join(OUT, "soundfont/GeneralUser-GS.sf3"), join(OUT, "soundfont/GeneralUser-GS.sf3.ogg"));
 for (const f of readdirSync(join(OUT, "samples"))) renameSync(join(OUT, "samples", f), join(OUT, "samples", `${f}.ogg`));
 
+// Plugins de la comunidad: el artefacto admite pocos archivos (511 por versión), así que se quitan
+// los que no se usan al correr (fuentes, tipos, documentación, páginas de demo) y los dos más
+// pesados (DistoMachine y Microverb), que en el artefacto no aparecen en la biblioteca.
+const COMM = join(OUT, "wam/community");
+if (existsSync(COMM)) {
+  for (const d of ["burns-audio", "wimmics/disto_machine", "wimmics/utils/sdk-parammgr/docs", "wimmics/utils/sdk-parammgr/img", "wimmics/utils/sdk-parammgr/src/sdk/docs"]) rmSync(join(COMM, d), { recursive: true, force: true });
+  const prune = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) prune(p); else if (/\.(ts|md|dsp|map|html)$|^\.nojekyll$|^(package(-lock)?\.json|tsconfig\.json)$/.test(f)) rmSync(p); } };
+  prune(COMM);
+}
+
 // MuseScore_General en tres partes
 const ms = [join(OUT, "soundfont/MuseScore_General.sf3"), join(ROOT, "public/soundfont/MuseScore_General.sf3"), join(ROOT, ".cache/MuseScore_General.sf3")].find(existsSync);
 const msBytes = ms ? readFileSync(ms) : null;
