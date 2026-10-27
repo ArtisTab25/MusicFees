@@ -317,3 +317,13 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .mono { font-family: var(--f-mono); letter-spacing: .05em; }
 .prow.trow { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
 .prow.trow .pk { height: 36px; font-size: 13px; }
+
+/* ▶ Más opciones: la fila se acomoda en varias líneas y se ven todas las filas */
+.tbtn.more { position: sticky; right: 0; z-index: 2; background: var(--blue); color: #fff; font-size: 15px; min-width: 40px; box-shadow: -10px 0 10px var(--tool); }
+body.more .tools .r1 { flex-wrap: wrap; overflow-x: visible; }
+body.more .tools .r1 .greens { margin-left: 0; }
+body.more .tools .r1 .tbtn.more { position: static; box-shadow: none; margin-left: auto; }
+body.more .tools .r2, body.more .tools .r3 { display: flex !important; flex-wrap: wrap; overflow-x: visible; }
+/* Pellizco: el cursor y la selección se esconden mientras la imagen se escala */
+#score { will-change: auto; }
+body.pinching #cursor, body.pinching .sel-layer, body.pinching .peer-cursor { visibility: hidden; }

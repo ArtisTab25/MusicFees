@@ -17,6 +17,7 @@ import { DRUM_PIECES, LATIN_PIECES } from "./score/instruments";
 import { BANKS, BUILTIN_URL, bankById, type Bank } from "./player/banks";
 import { downloadPack, getPack, hasPack } from "./player/downloads";
 import { adaptForAlphaTab } from "../scripts/sfadapt.mjs";
+import { attachPinch, ZOOM_MAX, ZOOM_MIN } from "./ui/pinch";
 import { buildKeypad } from "./ui/keypad";
 
 const DUR_GLYPH: Record<number, string> = { 1: "𝅝", 2: "𝅗𝅥", 4: "♩", 8: "♪", 16: "𝅘𝅥𝅯", 32: "𝅘𝅥𝅰", 64: "𝅘𝅥𝅱" };
@@ -156,7 +157,18 @@ const btnKbd = tb("keyboard", "Teclado del teléfono", () => {
   if (inputMode === "pad") { setInputMode("kbd"); toast("Teclado del teléfono. Para volver al de MusicFees toca ▦."); }
   keys.focus();
 });
-const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnView, btnLyrics, btnChords, greens);
+// ▶ despliega todas las opciones: la fila de herramientas se acomoda en varias líneas y aparecen las
+// filas de zoom, deshacer, velocidad y metrónomo aunque el teclado esté abierto.
+const btnMore = h("button", { class: "tbtn more", "aria-label": "Más opciones", "aria-expanded": "false", title: "Más opciones", onclick: () => setMore(!document.body.classList.contains("more")) }, "▶");
+function setMore(on: boolean) {
+  document.body.classList.toggle("more", on);
+  btnMore.textContent = on ? "◀" : "▶";
+  btnMore.setAttribute("aria-expanded", String(on));
+  btnMore.setAttribute("aria-label", on ? "Menos opciones" : "Más opciones");
+  PREFS.more = on; savePrefs();
+  requestAnimationFrame(() => { drawCursor(); scrollToCursor(); });
+}
+const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnView, btnLyrics, btnChords, greens, btnMore);
 const btnCompact = tb("chevronDown", "Ocultar o mostrar filas", () => { document.body.classList.toggle("compact"); PREFS.compact = document.body.classList.contains("compact"); savePrefs(); });
 const r2 = h("div", { class: "row r2" },
   tb("home", "Ir al inicio", () => { ed.setCursor({ b: 0, i: 0 }); scoreWrap.scrollTo({ top: 0 }); }),
@@ -192,6 +204,7 @@ const transport = h("div", { class: "transport" },
   chip, tempoBtn);
 tools.append(ctxStrip, pad.el, r1, r2, r3, transport);
 if (PREFS.compact) document.body.classList.add("compact");
+if (PREFS.more) setMore(true);
 if (inputMode === "pad") showPad(true);
 // Tocar la barra o la partitura no debe quitarle el foco al campo oculto: en Android el toque
 // genera un «mousedown» tardío que lo soltaba y cerraba el teclado justo después de abrirlo.
@@ -200,9 +213,34 @@ for (const el of [tools, paletteHost, scoreWrap]) el.addEventListener("mousedown
 });
 
 function setZoom(d: number) {
-  const z = Math.max(0.5, Math.min(1.8, Math.round((engine.api.settings.display.scale + d) * 10) / 10));
-  PREFS.zoom = z; savePrefs(); engine.setZoom(z); refresh();
+  const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((engine.api.settings.display.scale + d) * 10) / 10));
+  PREFS.zoom = z; savePrefs(); void engine.setZoom(z); refresh();
 }
+// Pellizcar la partitura para acercar o alejar.
+const pinch = attachPinch(scoreWrap, scoreEl, {
+  scale: () => engine.api.settings.display.scale,
+  apply: async (z) => { PREFS.zoom = z; savePrefs(); await engine.setZoom(z); refresh(); },
+  start: () => { if (down) { clearTimeout(down.timer); down = null; } document.body.classList.add("pinching"); },
+  end: () => { document.body.classList.remove("pinching"); requestAnimationFrame(() => drawCursor()); },
+  anchor: (fx, fy) => {
+    const off = surfaceOffset(), bl = engine.bounds;
+    if (!off || !bl) return null;
+    const x = fx + scoreWrap.scrollLeft - off.x, y = fy + scoreWrap.scrollTop - off.y;
+    // El tiempo bajo los dedos; si cae entre renglones, el más cercano de ese renglón o el del cursor.
+    const beat = bl.getBeatAtPos(x, y) ?? ed.beat;
+    const bb = beat ? bl.findBeat(beat)?.realBounds : null;
+    if (!beat || !bb) return null;
+    return { beat, rx: (x - bb.x) / Math.max(1, bb.w), dy: (y - bb.y) / engine.api.settings.display.scale };
+  },
+  place: (a, fx, fy) => {
+    const { beat, rx, dy } = a as { beat: import("@coderline/alphatab").model.Beat; rx: number; dy: number };
+    const off = surfaceOffset(), bb = engine.bounds?.findBeat(beat)?.realBounds;
+    if (!off || !bb) return false;
+    scoreWrap.scrollLeft = Math.max(0, off.x + bb.x + rx * bb.w - fx);
+    scoreWrap.scrollTop = Math.max(0, off.y + bb.y + dy * engine.api.settings.display.scale - fy);
+    return true;
+  },
+});
 function setSpeed(d: number) {
   engine.speed = Math.max(0.25, Math.min(2, Math.round((engine.speed + d) * 100) / 100));
   refresh();
@@ -401,6 +439,7 @@ function placeAt(clientX: number, clientY: number, mode: "tap" | "extend" | "sta
 }
 scoreWrap.addEventListener("pointerdown", (e) => {
   if (down) clearTimeout(down.timer);
+  if (pinch.active || !e.isPrimary) { down = null; return; }
   const d = { x: e.clientX, y: e.clientY, t: Date.now(), timer: 0, done: false };
   if (e.pointerType !== "mouse") d.timer = window.setTimeout(() => { if (down === d) { d.done = true; placeAt(d.x, d.y, "start"); } }, 500);
   down = d;
@@ -412,7 +451,7 @@ scoreWrap.addEventListener("pointercancel", () => { if (down) { clearTimeout(dow
 scoreWrap.addEventListener("pointerup", (e) => {
   const d = down;
   down = null;
-  if (!d) return;
+  if (!d || pinch.active) { if (d) clearTimeout(d.timer); return; }
   clearTimeout(d.timer);
   if (d.done || Date.now() - d.t > 1500 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
   placeAt(e.clientX, e.clientY, e.shiftKey ? "extend" : "tap");
@@ -487,7 +526,8 @@ engine.on("state", (playing) => { playBtn.replaceChildren(icon(playing ? "pause"
 engine.on("rendered", () => {
   loadingEl.remove(); drawCursor();
   // Al cambiar de pista el cursor de reproducción se quedaba donde estaba en el dibujo anterior.
-  if (!engine.playing && ed.beat) engine.seekBeat(ed.beat);
+  // Al pellizcar no: mover el cursor de reproducción hace que alphaTab desplace la vista hacia él.
+  if (!engine.playing && ed.beat && !document.body.classList.contains("pinching")) engine.seekBeat(ed.beat);
 });
 engine.on("ready", () => { refresh(); setSync(); if (pendingPlay) { pendingPlay = false; engine.playPause(); } });
 engine.on("loadProgress", (p) => { soundPct = p; if (p < 100) syncEl.textContent = `Sonidos ${p} %`; else syncEl.textContent = "Preparando sonidos…"; });

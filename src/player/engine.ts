@@ -112,7 +112,9 @@ export class Engine {
     s.player.scrollMode = at.ScrollMode.Continuous;
     s.player.scrollOffsetY = -40;
     this.api = new at.AlphaTabApi(el, s);
-    this.api.renderFinished.on(() => this.emit("rendered"));
+    // Las posiciones (boundsLookup) llegan con «postRenderFinished», no con «renderFinished»: usar el
+    // primero dibujaba el cursor y acomodaba el zoom con las posiciones del dibujo anterior.
+    this.api.postRenderFinished.on(() => this.emit("rendered"));
     this.api.playerPositionChanged.on((e) => {
       // Bucle de una parte con el motor de estudio: alphaTab no lo aplica ahí, se salta a mano.
       const r = this.range;
@@ -139,11 +141,13 @@ export class Engine {
     });
   }
 
-  on<K extends keyof EngineEvents>(k: K, fn: EngineEvents[K]) {
-    (this.listeners[k] ??= [] as never[]).push(fn as never);
+  on<K extends keyof EngineEvents>(k: K, fn: EngineEvents[K]): () => void {
+    const list = (this.listeners[k] ??= [] as never[]) as unknown[];
+    list.push(fn);
+    return () => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); };
   }
   private emit<K extends keyof EngineEvents>(k: K, ...args: Parameters<EngineEvents[K]>) {
-    for (const fn of this.listeners[k] ?? []) (fn as (...a: unknown[]) => void)(...args);
+    for (const fn of (this.listeners[k] ?? []).slice()) (fn as (...a: unknown[]) => void)(...args);
   }
 
   /** alphaTab solo regenera el MIDI cuando cambia el objeto de la canción; las ediciones lo modifican
@@ -243,10 +247,21 @@ export class Engine {
     if (typeof this.source !== "string") return this.source;
     return new Uint8Array(await (await fetch(this.source)).arrayBuffer());
   }
-  setZoom(z: number) {
-    this.api.settings.display.scale = z;
-    this.api.updateSettings();
-    this.api.render();
+  /** Cambia el tamaño de la partitura; resuelve cuando termina de dibujarse (o a los 4 s). */
+  setZoom(z: number): Promise<void> {
+    return new Promise((res) => {
+      // Después de dibujar, alphaTab desplaza la vista hasta el cursor de reproducción: al cambiar el
+      // tamaño eso mandaba la partitura al inicio. Se apaga ese desplazamiento mientras tanto.
+      const p = this.api.settings.player, mode = p.scrollMode;
+      if (!this.playing) p.scrollMode = at.ScrollMode.Off;
+      let t = 0;
+      const done = () => { clearTimeout(t); off(); window.setTimeout(() => { if (p.scrollMode === at.ScrollMode.Off) p.scrollMode = mode; }, 400); res(); };
+      const off = this.on("rendered", done);
+      t = window.setTimeout(done, 4000);
+      this.api.settings.display.scale = z;
+      this.api.updateSettings();
+      this.api.render();
+    });
   }
   setLayout(page: boolean) {
     this.api.settings.display.layoutMode = page ? at.LayoutMode.Page : at.LayoutMode.Horizontal;
