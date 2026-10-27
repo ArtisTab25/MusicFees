@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.8** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 0.9** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,21 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Novedades 0.9
+
+- **Baterías**: el kit elegido (cuarto, power, jazz, escobillas, electrónica, 808) ahora suena; alphaTab forzaba siempre el estándar. Teclado de batería agrupado por pieza.
+- **Audio fluido con efectos**: filtros nativos, chorus y delay compartidos, pedales de modulación a ritmo de control, efectos internos del sintetizador apagados y calidad ligera automática en teléfonos (Vista → Preferencias). Hilo de audio con todos los efectos en 4 pistas: 41 % → ~22 % de un núcleo de computadora.
+- **Cuentas** con Supabase Auth: correo y contraseña, Google (web) y administración de cuentas para administradores (función `mf-admin`). Requiere aplicar `supabase/migrations/003_supabase_auth.sql` y activar Google en Supabase (ver abajo).
+- **Guardado**: indicador (● Sin guardar / ✓ Guardado), guardado al salir de la app, recuperación de cambios que no subieron a la nube, versiones automáticas cada 10 min (Archivo → Versiones) y papelera de 30 días.
+- **Menú de pista** (mantén presionada una pista o toca ⋯): duplicar con o sin notas, transponer, cambiar afinación conservando el sonido, capo, color, bloquear, mover y copiar a otra canción.
+
+### Activar cuentas y Google
+
+1. Supabase → SQL Editor: ejecuta `supabase/migrations/003_supabase_auth.sql` (te hace administrador a axel@musicfees.app).
+2. Supabase → Authentication → URL Configuration: Site URL `https://artistab25.github.io/MusicFees/` y agrégala también en Redirect URLs.
+3. Google Cloud Console → APIs y servicios → Pantalla de consentimiento (Externa) → Credenciales → ID de cliente OAuth (Aplicación web) con URI de redirección `https://kxtjvycttkvunltojdht.supabase.co/auth/v1/callback`.
+4. Supabase → Authentication → Sign In / Providers → Google: activa y pega el ID y el secreto.
 
 ## Rendimiento (0.8)
 

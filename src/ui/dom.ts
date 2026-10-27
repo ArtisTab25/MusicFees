@@ -78,3 +78,20 @@ export function icon(name: keyof typeof P | string, size = 22): SVGSVGElement {
   s.append(p);
   return s;
 }
+
+/** Mantener presionado (~0.5 s) en el teléfono, o clic derecho en la computadora. */
+export function onLongPress(el: HTMLElement, fn: (e: Event) => void, ms = 500) {
+  let timer = 0, x = 0, y = 0, fired = false;
+  el.addEventListener("pointerdown", (e) => {
+    fired = false; x = e.clientX; y = e.clientY;
+    clearTimeout(timer);
+    timer = window.setTimeout(() => { fired = true; navigator.vibrate?.(15); fn(e); }, ms);
+  });
+  const cancel = () => clearTimeout(timer);
+  el.addEventListener("pointerup", cancel);
+  el.addEventListener("pointercancel", cancel);
+  el.addEventListener("pointermove", (e) => { if (Math.abs(e.clientX - x) > 8 || Math.abs(e.clientY - y) > 8) cancel(); });
+  // El toque que abrió el menú no debe además «tocar» el botón.
+  el.addEventListener("click", (e) => { if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
+  el.addEventListener("contextmenu", (e) => { e.preventDefault(); clearTimeout(timer); fn(e); });
+}

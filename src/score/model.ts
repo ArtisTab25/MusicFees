@@ -49,7 +49,12 @@ export type Op =
   /** Cambios de tempo de un compás: posición dentro del compás (0–1) y bpm. Lista vacía = sin cambios. */
   | { k: "tempo"; b: number; list: { r: number; bpm: number }[] }
   /** Masterizado de la canción (null = sin masterizar). */
-  | { k: "master"; fx: MasterFx | null };
+  | { k: "master"; fx: MasterFx | null }
+  // Menú de pista
+  | { k: "trackDup"; t: number; empty?: boolean }
+  | { k: "retune"; t: number; tuning: number[] }
+  | { k: "trackMeta"; t: number; meta: Partial<TrackMeta> }
+  | { k: "trackPaste"; json: string; name?: string };
 
 /** Formas de bend que se escriben con un toque (valores en cuartos de tono: 4 = un tono). */
 export type BendShape = "none" | "half" | "full" | "oneHalf" | "double" | "release" | "prebend" | "prebendRelease";
@@ -506,6 +511,10 @@ export function applyOp(score: Score, op: Op): Score {
   switch (op.k) {
     case "load":
       return at.model.JsonConverter.jsonToScore(op.json, settings);
+    case "trackDup": return dupTrack(score, op.t, !!op.empty);
+    case "trackPaste": return pasteTrack(score, op.json, op.name);
+    case "retune": retune(score, op.t, op.tuning); break;
+    case "trackMeta": setMeta(score, op.t, op.meta); break;
     case "fret": {
       const beat = beatAt(score, op);
       if (!beat) break;
@@ -834,4 +843,84 @@ export function barCapacity(mb: at.model.MasterBar) {
 }
 export function voiceUsed(voice: at.model.Voice) {
   return voice.beats.reduce((s, b) => s + beatTicks(b), 0);
+}
+
+// ---------- menú de pista: duplicar, pegar de otra canción, reafinar ----------
+type JsObj = Record<string, unknown> & { tracks: Record<string, unknown>[] };
+// JSON simple (claves en minúsculas, como lo escribe alphaTab).
+const toObj = (score: Score) => JSON.parse(at.model.JsonConverter.scoreToJson(score)) as JsObj;
+const fromObj = (o: JsObj) => { const sc = at.model.JsonConverter.jsonToScore(JSON.stringify(o), settings); assignChannels(sc); finishScore(sc); return sc; };
+/** Una pista en JSON (para copiarla a otra canción). */
+export const trackJson = (score: Score, t: number) => JSON.stringify(toObj(score).tracks[t]);
+
+/** Copia una pista justo debajo de la original (con notas, sonido, afinación, efectos y datos). */
+function dupTrack(score: Score, t: number, empty: boolean): Score {
+  const src = score.tracks[t];
+  if (!src) return score;
+  const o = toObj(score);
+  const copy = JSON.parse(JSON.stringify(o.tracks[t])) as Record<string, unknown>;
+  copy.name = `${src.name} (copia)`.slice(0, 60);
+  copy.shortname = String(copy.name).slice(0, 10);
+  o.tracks.splice(t + 1, 0, copy);
+  const out = fromObj(o);
+  const fx = fxMap(score)[t], meta = metaMap(score)[t];
+  out.notices = score.notices;
+  remapTrackData(out, (i) => (i <= t ? i : i + 1));
+  if (fx) { const m = fxMap(out); m[t + 1] = JSON.parse(JSON.stringify(fx)); writeFx(out, m); }
+  if (meta) setMeta(out, t + 1, { ...meta, locked: undefined });
+  if (empty) for (const bar of out.tracks[t + 1].staves[0].bars) for (const v of bar.voices) for (const b of v.beats) for (const n of b.notes.slice()) b.removeNote(n);
+  if (empty) finishScore(out);
+  return out;
+}
+
+/** Inserta al final una pista copiada de otra canción; ajusta su número de compases. */
+function pasteTrack(score: Score, trackJson: string, name?: string): Score {
+  let tr: Record<string, unknown> & { staves: { bars: unknown[] }[] };
+  try { tr = JSON.parse(trackJson); } catch { return score; }
+  const o = toObj(score);
+  const n = score.masterBars.length;
+  // Compases de relleno: uno vacío de la propia pista (sin notas).
+  const emptyBar = (() => {
+    const bars = tr.staves[0]?.bars as Record<string, unknown>[] | undefined;
+    const b = bars?.[bars.length - 1];
+    if (!b) return null;
+    const c = JSON.parse(JSON.stringify(b)) as Record<string, unknown> & { voices?: { beats?: { notes?: unknown[]; isEmpty?: boolean }[] }[] };
+    for (const v of c.voices ?? []) for (const be of v.beats ?? []) { be.notes = []; }
+    return c;
+  })();
+  for (const st of tr.staves) {
+    if (st.bars.length > n) st.bars.length = n;
+    while (st.bars.length < n && emptyBar) st.bars.push(JSON.parse(JSON.stringify(emptyBar)));
+  }
+  if (name) tr.name = name;
+  o.tracks.push(tr);
+  const out = fromObj(o);
+  out.notices = score.notices;
+  return out;
+}
+
+/** Cambia la afinación conservando el sonido: cada nota se mueve a la cuerda y traste más cercanos. */
+function retune(score: Score, t: number, tuning: number[]) {
+  const tr = score.tracks[t], st = tr?.staves[0];
+  if (!st || !st.isStringed || tuning.length !== st.tuning.length) return;
+  const old = st.tuning.slice();
+  // En alphaTab la cuerda 1 es la más grave (índice tuning.length - 1 en el arreglo).
+  const pitch = (str: number, fret: number, tun: number[]) => tun[tun.length - str] + fret + st.capo;
+  for (const bar of st.bars) for (const v of bar.voices) for (const b of v.beats) {
+    const used = new Set<number>();
+    const notes = b.notes.slice().sort((a, c) => pitch(a.string, a.fret, old) - pitch(c.string, c.fret, old));
+    for (const n of notes) {
+      const p = pitch(n.string, n.fret, old);
+      let best: { s: number; f: number } | null = null;
+      for (let s = 1; s <= tuning.length; s++) {
+        if (used.has(s)) continue;
+        const f = p - tuning[tuning.length - s] - st.capo;
+        if (f < 0 || f > 24) continue;
+        const stay = s === n.string ? -0.5 : 0; // si puede quedarse en su cuerda, mejor
+        if (!best || f + stay < best.f + (best.s === n.string ? -0.5 : 0)) best = { s, f };
+      }
+      if (best) { used.add(best.s); n.string = best.s; n.fret = best.f; }
+    }
+  }
+  st.stringTuning = new M.Tuning("", tuning.slice(), false);
 }

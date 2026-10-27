@@ -2,7 +2,7 @@
 import * as at from "@coderline/alphatab";
 import {
   applyOp, barCapacity, beatAt, beatTicks, bendShapeOf, tempoAt, tempoChanges, dynIndex, finishScore, fromJson, kindOf, noteFxState, type BendShape,
-  rowToString, stringToRow, toJson, voiceUsed, type BeatRef, type Kind, type NoteFx, type Op,
+  rowToString, stringToRow, toJson, metaMap, voiceUsed, type BeatRef, type Kind, type NoteFx, type Op,
 } from "../score/model";
 import type { Engine } from "../player/engine";
 import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, saveClip, type Clip, type Selection } from "../score/clip";
@@ -81,8 +81,14 @@ export class Editor {
 
   // ---------- aplicar cambios ----------
   /** Aplica cambios del usuario: guarda historial, envía al dúo y vuelve a dibujar. */
+  /** Avisa cuando una edición toca una pista bloqueada (la UI lo muestra). */
+  onBlocked: ((msg: string) => void) | null = null;
   commit(ops: Op[], opts: { history?: boolean; render?: boolean } = {}) {
     if (!ops.length) return;
+    // Pistas bloqueadas: no se editan sus notas (sí se puede desbloquear, mover o mezclar).
+    const meta = metaMap(this.score);
+    const locked = ops.find((o) => "t" in o && typeof o.t === "number" && meta[o.t]?.locked && !["trackMeta", "trackMove", "trackFx", "trackDup"].includes(o.k) && !(o.k === "trackProp" && ["mute", "solo", "volume", "balance"].includes((o as { prop: string }).prop)));
+    if (locked) { this.onBlocked?.(`La pista «${this.score.tracks[(locked as { t: number }).t]?.name}» está bloqueada. Desbloquéala desde su menú (mantén presionada la pista).`); return; }
     if (opts.history !== false) {
       // Si lo anterior todavía no se pasó a JSON es que se está escribiendo seguido: esos cambios
       // se deshacen juntos (el paso anterior del historial ya guarda cómo estaba antes).
@@ -440,6 +446,23 @@ export class Editor {
   }
   deleteSel() { this.commit(planClear(this.score, this.target())); }
   /** Transpone la selección; sin selección, toda la pista. */
+  /** Transpone una pista completa (todas sus voces). */
+  transposeTrack(t: number, semis: number): string {
+    const tr = this.score.tracks[t];
+    if (!tr || kindOf(tr) === "drums") return "La batería no se transpone.";
+    const bars = tr.staves[0].bars;
+    const ops: Op[] = [];
+    let lost = 0;
+    const voices = Math.max(...bars.map((b) => b.voices.length));
+    for (let v = 0; v < voices; v++) {
+      const last = bars[bars.length - 1].voices[v];
+      if (!last) continue;
+      const r = planTranspose(this.score, { t, v, a: { b: 0, i: 0 }, z: { b: bars.length - 1, i: last.beats.length - 1 } }, semis);
+      ops.push(...r.ops); lost += r.lost;
+    }
+    this.commit(ops);
+    return `«${tr.name}»: ${semis > 0 ? "+" : ""}${semis} semitono${Math.abs(semis) === 1 ? "" : "s"}.${lost ? ` ${lost} nota${lost > 1 ? "s" : ""} quedaba${lost > 1 ? "n" : ""} fuera del rango y se quitó.` : ""}`;
+  }
   transpose(semis: number): string {
     if (this.kind === "drums") return "La batería no se transpone.";
     const bars = this.track.staves[0].bars, c = this.cursor;

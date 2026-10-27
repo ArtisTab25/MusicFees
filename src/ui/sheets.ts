@@ -6,15 +6,16 @@ import type { KeyInput } from "../editor/keys";
 import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
-import { kindOf, fxMap, masterOf, drumKit, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { kindOf, fxMap, masterOf, drumKit, metaMap, trackJson, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { Capacitor } from "@capacitor/core";
+import { addVersion, deleteTrash, deleteVersion, trash, trashList, versions } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
 import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
-import { h, icon } from "./dom";
+import { h, icon, onLongPress } from "./dom";
 import { ARTIFACT } from "../config";
 import type { Bank } from "../player/banks";
 
@@ -88,11 +89,12 @@ export class Sheets {
           del.dataset.armed = "1"; del.style.background = "#e5484d"; this.c.toast("Toca otra vez para borrar la pista.");
           setTimeout(() => { delete del.dataset.armed; del.style.background = ""; }, 3000);
         };
-        const row = h("div", { class: `tr${i === ed.cursor.t ? " on" : ""}` },
-          h("span", { class: "stripe", style: `background:${colors[i % colors.length]}` }),
+        const meta = metaMap(ed.score)[i] ?? {};
+        const row = h("div", { class: `tr${i === ed.cursor.t ? " on" : ""}${meta.locked ? " locked" : ""}`, title: "Mantén presionada para ver todas las opciones" },
+          h("span", { class: "stripe", style: `background:${meta.color ?? colors[i % colors.length]}` }),
           h("span", { class: "ic" }, icon(kind === "drums" ? "drum" : kind === "notation" ? "piano" : "guitar", 22)),
           h("button", { class: "nm", style: "background:none;border:0;text-align:left;padding:0", onclick: () => { ed.selectTrack(i); this.close(); } },
-            h("b", null, `${i + 1}  ${tr.name}`), h("small", null, PRESETS.find((p) => p.program === pi.program && p.kind === kind)?.name ?? `Sonido GM ${pi.program}`)),
+            h("b", null, `${i + 1}  ${tr.name}${meta.locked ? " 🔒" : ""}`), h("small", null, PRESETS.find((p) => p.program === pi.program && p.kind === kind)?.name ?? `Sonido GM ${pi.program}`)),
           h("span", { class: "acts" },
             h("button", { class: "ibtn", "aria-label": "Ver esta pista", "aria-pressed": ed.renderTracks().includes(i), onclick: () => { ed.selectTrack(i); this.close(); } }, icon("eye", 18)),
             mute, solo),
@@ -100,7 +102,9 @@ export class Sheets {
           h("div", { class: "inline", style: "grid-column:3/5" },
             h("button", { class: "ibtn", "aria-label": "Subir", disabled: i === 0, onclick: () => { this.ops([{ k: "trackMove", t: i, to: i - 1 }]); render(); } }, icon("up", 18)),
             h("button", { class: "ibtn", "aria-label": "Bajar", disabled: i === ed.score.tracks.length - 1, onclick: () => { this.ops([{ k: "trackMove", t: i, to: i + 1 }]); render(); } }, icon("down", 18)),
-            del));
+            del,
+            h("button", { class: "ibtn", "aria-label": `Más opciones de ${tr.name}`, onclick: () => this.trackMenu(i) }, "⋯")));
+        onLongPress(row, () => this.trackMenu(i));
         list.append(row);
       });
     };
@@ -115,9 +119,55 @@ export class Sheets {
           this.ops([{ k: "trackAdd", preset: p.id, name: p.name }]);
           ed.selectTrack(ed.score.tracks.length - 1);
           render();
-        } }, "+ Agregar"))),
+        } }, "+ Agregar")),
+        (() => {
+          let clip: { name: string; from: string; json: string } | null = null;
+          try { clip = JSON.parse(localStorage.getItem("mf:trackclip") || "null"); } catch { /* nada */ }
+          return clip ? h("button", { class: "ghost", onclick: () => { this.ops([{ k: "trackPaste", json: clip!.json, name: clip!.name }]); ed.selectTrack(ed.score.tracks.length - 1); this.c.toast(`«${clip!.name}» (de ${clip!.from || "otra canción"}) se pegó como pista nueva.`); render(); } }, `Pegar pista copiada: ${clip.name}`) : null;
+        })()),
       h("div", { class: "sec" }, h("h3", null, "Master"), h("div", { class: "field" }, h("label", null, "Volumen general"), master)),
-      h("p", { class: "note" }, "Silencio y solo se guardan con la canción, igual que en Guitar Pro. El volumen se escucha al instante."));
+      h("p", { class: "note" }, "Mantén presionada una pista (o toca ⋯) para duplicarla, transponerla, cambiar su afinación, bloquearla, darle color o copiarla a otra canción."));
+  }
+
+  // ---------- menú de pista (mantener presionada) ----------
+  trackMenu(i: number) {
+    const { ed } = this.c;
+    const tr = ed.score.tracks[i];
+    if (!tr) return;
+    const kind = kindOf(tr), st = tr.staves[0], meta = metaMap(ed.score)[i] ?? {};
+    const again = () => this.trackMenu(Math.min(i, ed.score.tracks.length - 1));
+    const act = (label: string, sub: string, fn: () => void, danger = false) => h("button", { class: danger ? "danger" : "", onclick: fn }, label, sub ? h("small", null, sub) : null);
+    const name = h("input", { type: "text", value: tr.name, "aria-label": "Nombre de la pista" });
+    name.onchange = () => this.ops([{ k: "trackProp", t: i, prop: "name", val: name.value }]);
+    const COLORS = ["#e5484d", "#f2a33a", "#e9d44c", "#46c37b", "#2a9d8f", "#4a8cf0", "#9b5de5", "#d45d9c", "#8d8f99"];
+    const swatches = h("div", { class: "swatches" }, COLORS.map((c) => h("button", { class: "sw", style: `background:${c}`, "aria-label": `Color ${c}`, "aria-pressed": meta.color === c, onclick: () => { this.ops([{ k: "trackMeta", t: i, meta: { color: c } }]); again(); } })));
+    const sections: HTMLElement[] = [
+      h("div", { class: "sec" }, h("h3", null, "Nombre y color"), name, swatches),
+      h("div", { class: "sec" }, h("h3", null, "Pista"), h("div", { class: "menu-grid" },
+        act("Duplicar pista", "Con notas, sonido y efectos", () => { this.ops([{ k: "trackDup", t: i }]); ed.selectTrack(i + 1); this.c.toast(`Se duplicó «${tr.name}».`); this.close(); }),
+        act("Duplicar vacía", "Mismo instrumento y afinación, sin notas", () => { this.ops([{ k: "trackDup", t: i, empty: true }]); ed.selectTrack(i + 1); this.c.toast("Pista nueva lista para escribir."); this.close(); }),
+        act("Subir", "", () => { if (i > 0) { this.ops([{ k: "trackMove", t: i, to: i - 1 }]); this.trackMenu(i - 1); } }),
+        act("Bajar", "", () => { if (i < ed.score.tracks.length - 1) { this.ops([{ k: "trackMove", t: i, to: i + 1 }]); this.trackMenu(i + 1); } }),
+        act(meta.locked ? "Desbloquear" : "Bloquear", meta.locked ? "Permite editar sus notas" : "Evita cambiar sus notas por accidente", () => { this.ops([{ k: "trackMeta", t: i, meta: { locked: !meta.locked } }]); again(); }),
+        act("Copiar para otra canción", "Luego abre la otra canción y pégala", () => {
+          try { localStorage.setItem("mf:trackclip", JSON.stringify({ name: tr.name, from: ed.score.title, json: trackJson(ed.score, i) })); this.c.toast(`«${tr.name}» copiada. Ábrela en otra canción con «Pegar pista copiada».`); }
+          catch { this.c.toast("No hay espacio para copiar esta pista.", true); }
+        }),
+        act("Propiedades y efectos", "Sonido, kit, volumen, efectos, plugins", () => { ed.selectTrack(i); this.sets("track"); }),
+        act("Borrar pista", "", () => { if (ed.score.tracks.length <= 1) { this.c.toast("La canción necesita al menos una pista."); return; } this.ops([{ k: "trackDel", t: i }]); if (ed.cursor.t >= ed.score.tracks.length) ed.selectTrack(ed.score.tracks.length - 1); this.c.toast(`Se borró «${tr.name}». Deshacer la regresa.`); this.close(); }, true))),
+    ];
+    if (kind !== "drums") sections.push(h("div", { class: "sec" }, h("h3", null, "Transponer toda la pista"), h("div", { class: "inline" },
+      ...([[-12, "−8va"], [-2, "−1 tono"], [-1, "−½"], [1, "+½"], [2, "+1 tono"], [12, "+8va"]] as [number, string][]).map(([n, l]) => h("button", { class: "ghost", onclick: () => this.c.toast(ed.transposeTrack(i, n)) }, l)))));
+    if (kind === "tab") {
+      const n = st.tuning.length;
+      const tun = h("select", { "aria-label": "Afinación nueva" }, Object.entries(TUNINGS).filter(([, t]) => t.strings.length === n).map(([id, t]) => h("option", { value: id, selected: t.strings.join() === st.tuning.join() }, t.name)));
+      const capo = h("input", { type: "number", min: 0, max: 12, value: st.capo, "aria-label": "Capo", style: "width:80px" });
+      sections.push(h("div", { class: "sec" }, h("h3", null, "Afinación y capo"), tun, h("div", { class: "inline" },
+        h("button", { class: "primary", onclick: () => { const t = TUNINGS[tun.value]; if (t) { this.ops([{ k: "retune", t: i, tuning: t.strings }]); this.c.toast(`Afinación ${t.name}: las notas se movieron para que suene igual.`); again(); } } }, "Cambiar y que suene igual"),
+        h("button", { class: "ghost", onclick: () => { const t = TUNINGS[tun.value]; if (t) { this.ops([{ k: "trackProp", t: i, prop: "tuning", val: t.strings }]); this.c.toast(`Afinación ${t.name}: los trastes quedaron igual (suena distinto).`); again(); } } }, "Cambiar y dejar los trastes")),
+        h("div", { class: "inline" }, h("span", null, "Capo"), capo, h("button", { class: "ghost", onclick: () => { this.ops([{ k: "trackProp", t: i, prop: "capo", val: Number(capo.value) }]); this.c.toast(`Capo en ${capo.value}.`); } }, "Aplicar"))));
+    }
+    this.open(`${i + 1}. ${tr.name}`, "full", ...sections);
   }
 
   // ---------- Sets: canción y pista ----------
@@ -304,6 +354,8 @@ export class Sheets {
         item("Importar archivo", "Guitar Pro (.gp, .gp5, .gpx), MusicXML", () => this.importDialog()),
         item("Compartir con tu dúo", "Enlace para editar juntos", () => this.share()),
         item("Exportar", "MP3, WAV, Guitar Pro, MIDI, PDF", () => this.exportDialog()),
+        item("Versiones", "Historial automático y versiones con nombre", () => this.versionsSheet()),
+        item("Papelera", "Canciones borradas (30 días)", () => this.trashSheet()),
       ],
       Editar: [
         item("Deshacer", "", close(() => ed.undo())), item("Rehacer", "", close(() => ed.redo())),
@@ -361,12 +413,13 @@ export class Sheets {
         item("Mezclador", "Volumen, paneo, solo", () => this.tracks()),
       ],
       Vista: [
+        item("Preferencias del editor", "Sonido al escribir, vista, calidad de audio", () => this.prefsSheet()),
         item("Barra compacta", "Más espacio para la partitura", close(() => document.body.classList.toggle("compact"))),
         item(ed.viewAll ? "Ver solo esta pista" : "Ver todas las pistas", "", close(() => { ed.viewAll = !ed.viewAll; ed.rerender(); })),
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 0.8 y licencias", () => this.about()),
+        item("Acerca de MusicFees", "Versión 0.9 y licencias", () => this.about()),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -411,6 +464,17 @@ export class Sheets {
     };
     const when = (t: number | string) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
     const openId = (id: string) => () => { this.close(); this.c.openSong(id); };
+    /** Antes de borrar, la canción completa va a la papelera (30 días). */
+    const binned = (id: string, title: string, del: () => Promise<void> | void, where: "local" | "cloud" | "claude") => async () => {
+      let json = loadLocalDoc(id);
+      try {
+        if (!json && where === "cloud") json = (await cloud.get(id))?.data ?? null;
+        if (!json && where === "claude" && claudeLib) json = await claudeLib.load(id);
+      } catch { /* sin copia */ }
+      if (json) await trash({ song: id, title, cloud: where !== "local", json }).catch(() => {});
+      await del();
+      this.c.toast(json ? `«${title}» está en la papelera (30 días).` : `«${title}» se borró.`);
+    };
 
     // Cuenta
     const who = claudeLib ? "Tu biblioteca usa tu cuenta de Claude: solo tú ves tus canciones."
@@ -444,7 +508,7 @@ export class Sheets {
 
     const entries = localList();
     const onDevice = entries.filter((e) => e.id.startsWith("local-"));
-    local.replaceChildren(...(onDevice.length ? onDevice.map((e) => row(e.title, `${when(e.updated)}${e.id === this.c.songId ? " · abierta" : ""}`, openId(e.id), () => forgetSong(e.id),
+    local.replaceChildren(...(onDevice.length ? onDevice.map((e) => row(e.title, `${when(e.updated)}${e.id === this.c.songId ? " · abierta" : ""}`, openId(e.id), binned(e.id, e.title, () => forgetSong(e.id), "local"),
       (cloud.session || claudeLib) ? h("button", { class: "ibtn", "aria-label": "Subir a mi biblioteca", title: "Subir a mi biblioteca", onclick: async () => {
         const json = loadLocalDoc(e.id);
         if (!json) return;
@@ -473,6 +537,7 @@ export class Sheets {
       h("div", { class: "sec" }, h("h3", null, claudeLib ? "Mis canciones" : cloud.session ? "Mis canciones (en la nube)" : "Mis canciones"), mine),
       h("div", { class: "sec" }, h("h3", null, "Solo en este dispositivo"), local),
       h("div", { class: "sec" }, h("h3", null, "Pistas de muestra"), samples),
+      h("div", { class: "inline" }, h("button", { class: "ghost", onclick: () => this.trashSheet() }, "Papelera"), h("button", { class: "ghost", onclick: () => this.versionsSheet() }, "Versiones de la canción abierta")),
       h("div", { class: "sec" }, h("h3", null, "Plugins de efectos"),
         h("p", { class: "note" }, `${WAM_CATALOG.length} plugins WAM 2.0 probados con MusicFees, con su dirección para usarlos aquí o en cualquier programa compatible.`),
         h("button", { class: "ghost", onclick: () => this.pluginLibrary() }, "Abrir biblioteca de plugins")));
@@ -483,11 +548,11 @@ export class Sheets {
         const ok = await claudeLib.ready;
         const list = ok ? await claudeLib.list() : [];
         mine.replaceChildren(...(!ok ? [h("p", { class: "note" }, "Inicia sesión en Claude para guardar tu biblioteca. Mientras, todo queda en este navegador.")]
-          : list.length ? list.map((x) => row(x.title, `${when(x.updated)}${`claude-${x.id}` === this.c.songId ? " · abierta" : ""}`, openId(`claude-${x.id}`), () => claudeLib.remove(x.id)))
+          : list.length ? list.map((x) => row(x.title, `${when(x.updated)}${`claude-${x.id}` === this.c.songId ? " · abierta" : ""}`, openId(`claude-${x.id}`), binned(x.id, x.title, () => claudeLib.remove(x.id), "claude")))
           : [h("p", { class: "note" }, "Todavía no hay canciones. Crea una, importa un archivo o abre una muestra.")]));
       } else if (cloud.session) {
         const list = await cloud.mySongs();
-        mine.replaceChildren(...(list.length ? list.map((x) => row(x.title, `${when(x.updated_at)}${x.id === this.c.songId ? " · abierta" : ""}`, openId(x.id), () => cloud.deleteMine(x.id)))
+        mine.replaceChildren(...(list.length ? list.map((x) => row(x.title, `${when(x.updated_at)}${x.id === this.c.songId ? " · abierta" : ""}`, openId(x.id), binned(x.id, x.title, () => cloud.deleteMine(x.id), "cloud")))
           : [h("p", { class: "note" }, "Todavía no hay canciones. Crea una, importa un archivo o abre una muestra.")]));
         if (this.c.isCloud && this.c.songId && !list.some((x) => x.id === this.c.songId))
           mine.append(h("button", { class: "ghost", onclick: async () => { try { await cloud.claim(this.c.songId!); this.c.toast("La canción abierta quedó en tu biblioteca."); this.library(); } catch (e) { this.c.toast((e as Error).message, true); } } }, "Guardar la canción abierta en mi biblioteca"));
@@ -580,6 +645,90 @@ export class Sheets {
       msg, h("p", { class: "note" }, "Quien prefiera puede crear su propia cuenta con «Entrar con Google» en la pantalla de acceso."),
       h("div", { class: "sec" }, h("h3", null, "Cuentas"), list));
     draw();
+  }
+
+  // ---------- versiones ----------
+  async versionsSheet() {
+    const { ed } = this.c, id = this.c.songId;
+    if (!id) return;
+    const list = h("div", { class: "trlist" }, h("p", { class: "note" }, "Cargando…"));
+    const name = h("input", { type: "text", placeholder: "Nombre (por ejemplo: antes del solo)", "aria-label": "Nombre de la versión" });
+    const fmt = (t: number) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
+    const draw = async () => {
+      const vs = await versions(id).catch(() => []);
+      list.replaceChildren(...(vs.length ? vs.map((v) => {
+        const restore = h("button", { class: "ghost", onclick: async () => {
+          ed.commit([{ k: "load", json: v.json }]); // se puede deshacer
+          this.close();
+          this.c.toast(`Volviste a la versión del ${fmt(v.t)}. Deshacer la quita.`);
+        } }, "Restaurar");
+        const del = h("button", { class: "ibtn", "aria-label": "Borrar versión", onclick: async () => { await deleteVersion(v.id); draw(); } }, icon("trash", 18));
+        return h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
+          h("div", { class: "nm" }, h("b", null, v.label || (v.auto ? "Automática" : "Versión")), h("small", null, `${fmt(v.t)} · ${Math.round(v.json.length / 1024)} KB`)),
+          h("span", { class: "acts" }, restore, del));
+      }) : [h("p", { class: "note" }, "Todavía no hay versiones. Se toma una sola cada 10 minutos de edición, o guarda una ahora.")]));
+    };
+    this.open("Versiones", "full",
+      h("form", { class: "inline", onsubmit: async (e: Event) => { e.preventDefault(); await addVersion(id, ed.score.title || "Sin título", ed.json(), name.value.trim() || "Guardada a mano"); name.value = ""; this.c.toast("Versión guardada."); draw(); } },
+        name, h("button", { class: "primary" }, "Guardar versión")),
+      h("p", { class: "note" }, "Las versiones se guardan en este dispositivo: las 20 automáticas más recientes y todas las que nombres."),
+      list);
+    draw();
+  }
+
+  // ---------- papelera ----------
+  async trashSheet() {
+    const list = h("div", { class: "trlist" }, h("p", { class: "note" }, "Cargando…"));
+    const fmt = (t: number) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
+    const draw = async () => {
+      const items = await trashList().catch(() => []);
+      list.replaceChildren(...(items.length ? items.map((x) => {
+        const back = h("button", { class: "ghost", onclick: async () => {
+          const { fromJson } = await import("../score/model");
+          const sc = fromJson(x.json);
+          sc.title = sc.title || x.title;
+          await deleteTrash(x.id);
+          this.close();
+          await this.c.addSong(sc);
+          this.c.toast(`«${x.title}» volvió a tu biblioteca.`);
+        } }, "Recuperar");
+        const del = h("button", { class: "ibtn", "aria-label": `Borrar para siempre ${x.title}` }, icon("trash", 18));
+        del.onclick = async () => {
+          if (!del.dataset.armed) { del.dataset.armed = "1"; del.style.background = "#e5484d"; this.c.toast("Toca otra vez para borrarla para siempre."); return; }
+          await deleteTrash(x.id); draw();
+        };
+        const days = 30 - Math.floor((Date.now() - x.t) / 86_400_000);
+        return h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
+          h("div", { class: "nm" }, h("b", null, x.title), h("small", null, `Borrada el ${fmt(x.t)} · se elimina en ${days} ${days === 1 ? "día" : "días"}`)),
+          h("span", { class: "acts" }, back, del));
+      }) : [h("p", { class: "note" }, "La papelera está vacía.")]));
+    };
+    this.open("Papelera", "full", list, h("p", { class: "note" }, "Las canciones borradas se guardan aquí, en este dispositivo, durante 30 días."));
+    draw();
+  }
+
+  // ---------- preferencias del editor ----------
+  prefsSheet() {
+    const { prefs, engine } = this.c;
+    const toggle = (id: string, label: string, sub: string, on: boolean, set: (v: boolean) => void) => {
+      const box = h("input", { type: "checkbox", id, checked: on });
+      box.onchange = () => { set(box.checked); this.c.savePrefs(); };
+      return h("label", { class: "pref", for: id }, box, h("span", null, label, h("small", null, sub)));
+    };
+    const quality = h("select", { id: "pf-q", "aria-label": "Calidad de audio" },
+      [["auto", "Automática (ligera en teléfonos)"], ["high", "Alta"], ["light", "Ligera (más fluida)"]].map(([v, l]) => h("option", { value: v, selected: (prefs.audioQuality ?? "auto") === v }, l)));
+    quality.onchange = async () => {
+      prefs.audioQuality = quality.value; this.c.savePrefs();
+      if (engine.fx) { await this.c.setFx(false); await this.c.setFx(true); this.c.toast("Motor de estudio reiniciado con la calidad nueva."); }
+    };
+    this.open("Preferencias del editor", "full",
+      h("div", { class: "sec" }, h("h3", null, "Escribir"),
+        toggle("pf-hear", "Oír cada nota al escribirla", "Suena la nota o la pieza de batería al ponerla", prefs.hearNotes !== false, (v) => { prefs.hearNotes = v; engine.hearNotes = v; }),
+        toggle("pf-focus", "Modo enfocado", "Muestra solo la pista que estás escribiendo", !this.c.ed.viewAll, (v) => { this.c.ed.viewAll = !v; this.c.ed.rerender(); })),
+      h("div", { class: "sec" }, h("h3", null, "Vista"),
+        toggle("pf-cont", "Vista continua", "La partitura en una línea horizontal que avanza", prefs.layout === "h", (v) => { prefs.layout = v ? "h" : "p"; engine.setLayout(!v); })),
+      h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "field" }, h("label", { for: "pf-q" }, "Calidad del motor de estudio"), quality),
+        h("p", { class: "note" }, "La ligera quita el sobremuestreo de la distorsión, usa menos voces y una reverb más corta: suena casi igual y no se traba en teléfonos. Al exportar siempre se usa la alta.")));
   }
 
   async share() {
@@ -941,7 +1090,7 @@ export class Sheets {
   }
   about() {
     this.open("Acerca de MusicFees", "full",
-      h("p", null, "MusicFees 0.8 — tablaturas y partituras multipista con edición en dúo."),
+      h("p", null, "MusicFees 0.9 — tablaturas y partituras multipista con edición en dúo."),
       h("p", { class: "note" }, "Partitura y reproducción: alphaTab (MPL-2.0). Fuente musical: Bravura (SIL OFL). Sonidos: MuseScore General de S. Christian Collins, basado en Fluid R3 de Frank Wen y Michael Cowgill (licencia MIT), y GeneralUser GS de S. Christian Collins (uso libre, también comercial). Motor de estudio: spessasynth_lib (Apache-2.0) y Tone.js (MIT). Nube: Supabase."));
   }
 }

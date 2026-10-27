@@ -160,7 +160,7 @@ body.compact .tools .r2, body.compact .tools .r3 { display: none; }
 .sec h3 { margin: 0 0 8px; font-family: var(--f-cond); font-size: 18px; letter-spacing: .04em; text-transform: uppercase; color: #9fb6ee; }
 .field { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
 .field label { color: var(--muted-d); font-size: 13px; }
-.field input, .field select, textarea { background: #1d1e26; border: 1px solid var(--line); border-radius: 7px; height: 38px; padding: 0 10px; min-width: 0; width: 100%; }
+.field input, .field select, textarea, .sec > input[type=text], .sec > select, .sec .inline > input, .sheet form.inline > input { background: #1d1e26; border: 1px solid var(--line); border-radius: 7px; height: 38px; padding: 0 10px; min-width: 0; width: 100%; }
 textarea { height: auto; padding: 10px; line-height: 1.5; }
 .inline { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .trlist { display: flex; flex-direction: column; }
@@ -288,3 +288,17 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .sheet .google .g { font-weight: 800; font-size: 18px; color: #4285f4; }
 .sheet .or { text-align: center; font-size: 12px; color: var(--muted-d); margin: 10px 0 2px; }
 .linkbtn { background: none; border: 0; color: var(--blue); font-size: 13px; padding: 4px 0; text-decoration: underline; }
+
+/* Guardado y preferencias */
+.sync.dirty { color: var(--amber); }
+.pref { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; min-height: 44px; }
+.pref input[type=checkbox] { width: 22px; height: 22px; margin-top: 2px; flex: none; }
+.pref span { display: flex; flex-direction: column; gap: 2px; font-size: 15px; }
+.pref small { color: var(--muted-d); font-size: 12px; }
+
+/* Menú de pista */
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sw { width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent; }
+.sw[aria-pressed="true"] { border-color: #fff; box-shadow: 0 0 0 2px var(--blue); }
+.menu-grid button.danger { color: var(--red); }
+.tr.locked { opacity: .85; }

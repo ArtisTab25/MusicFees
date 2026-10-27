@@ -6,7 +6,8 @@ import { KeyInput } from "./editor/keys";
 import { createSong, fromJson, toJson, finishScore, kindOf, fxMap, masterOf } from "./score/model";
 import { Cloud, LiveSession, clientId, loadLocalDoc, localList, rememberSong, saveLocalDoc, type Peer } from "./collab/cloud";
 import { ClaudeLibrary } from "./collab/claudeLib";
-import { h, $, icon } from "./ui/dom";
+import { addVersion, clearPending, markPending, pendingSince } from "./collab/vault";
+import { h, $, icon, onLongPress } from "./ui/dom";
 import { ARTIFACT, NO_CLOUD_MSG, PUBLIC_URL } from "./config";
 import { Capacitor } from "@capacitor/core";
 import { buildPalettes } from "./ui/palettes";
@@ -96,6 +97,7 @@ async function setBank(id: string, onProgress: (pct: number) => void = () => {})
   if (engine.fx) { engine.disableFx(); await setFx(true); } // el motor con efectos también cambia de banco
 }
 if (PREFS.layout === "h") engine.setLayout(false);
+engine.hearNotes = PREFS.hearNotes !== false;
 const ed = new Editor(createSong("blank_gtr", 8), engine);
 const keys = new KeyInput(ed, (m) => toast(m));
 const cloud = new Cloud();
@@ -179,7 +181,9 @@ const playBtn = h("button", { class: "play", "aria-label": "Reproducir", onclick
 let soundPct = 0, pendingPlay = false;
 const chipName = h("span", { class: "nm" });
 const chipMeta = h("span", { class: "meta" });
-const chip = h("button", { class: "chip", "aria-label": "Pista actual, abrir pistas", onclick: () => sheets.tracks() }, chipName, chipMeta);
+const chip = h("button", { class: "chip", "aria-label": "Pista actual, abrir pistas (mantén presionado para sus opciones)", onclick: () => sheets.tracks() }, chipName, chipMeta);
+onLongPress(chip, () => sheets.trackMenu(ed.cursor.t));
+ed.onBlocked = (msg) => toast(msg, true);
 const transport = h("div", { class: "transport" },
   h("button", { class: "skip", "aria-label": "Compás anterior", onclick: () => jumpBar(-1) }, icon("prev", 28)),
   playBtn,
@@ -490,18 +494,31 @@ window.addEventListener("resize", () => drawCursor());
 
 // ---------- guardar y dúo en vivo ----------
 let saveLocalT = 0, saveCloudT = 0;
+/** Dónde vive la canción abierta (cuando no hay nada pendiente). */
+function placeLabel() {
+  return isClaudeId(songId) ? "En tu biblioteca de Claude" : ARTIFACT ? "Solo en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : cloud.session ? `Biblioteca de ${cloud.session.username}` : "En la nube") : "Solo en este teléfono";
+}
+let savedAt = 0;
 function setSync(msg?: string, err = false) {
-  syncEl.textContent = msg ?? (isClaudeId(songId) ? "En tu biblioteca de Claude" : ARTIFACT ? "Solo en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : cloud.session ? `Biblioteca de ${cloud.session.username}` : "En la nube") : "Solo en este teléfono");
+  syncEl.textContent = msg ?? (savedAt ? `✓ Guardado · ${placeLabel()}` : placeLabel());
   syncEl.classList.toggle("err", err);
+  syncEl.classList.toggle("dirty", msg === "● Sin guardar");
+}
+/** Guarda ya en el teléfono (y toma una versión automática cada 10 minutos de edición). */
+function saveLocalNow() {
+  clearTimeout(saveLocalT);
+  if (!songId) return;
+  const json = ed.json();
+  saveLocalDoc(songId, json);
+  rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
+  if (isCloud || isClaudeId(songId)) markPending(songId);
+  void addVersion(songId, ed.score.title || "Sin título", json, "", true).catch(() => { /* sin IndexedDB */ });
+  if (!isCloud && !isClaudeId(songId)) { savedAt = Date.now(); setSync(); }
 }
 ed.onDirty = () => {
+  setSync("● Sin guardar");
   clearTimeout(saveLocalT);
-  saveLocalT = window.setTimeout(() => {
-    if (!songId) return;
-    const json = ed.json();
-    saveLocalDoc(songId, json);
-    rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
-  }, 500);
+  saveLocalT = window.setTimeout(() => { saveLocalT = 0; saveLocalNow(); }, 500);
   if (isCloud) scheduleCloudSave();
   if (isClaudeId(songId)) scheduleClaudeSave();
 };
@@ -509,22 +526,35 @@ let saveClaudeT = 0;
 function scheduleClaudeSave(delay = 2000) {
   clearTimeout(saveClaudeT);
   saveClaudeT = window.setTimeout(async () => {
+    saveClaudeT = 0;
     if (!claudeLib || !isClaudeId(songId)) return;
+    const id = songId!;
     setSync("Guardando…");
-    try { await claudeLib.save(songId!.slice(7), ed.score.title, ed.json()); setSync(); }
+    try { await claudeLib.save(id.slice(7), ed.score.title, ed.json()); clearPending(id); savedAt = Date.now(); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
 function scheduleCloudSave(delay = 1500) {
   clearTimeout(saveCloudT);
   saveCloudT = window.setTimeout(async () => {
+    saveCloudT = 0;
     if (!songId || !isCloud) return;
     if (live && !live.isHost) return; // guarda quien es anfitrión mientras los dos están conectados
+    const id = songId;
     setSync("Guardando…");
-    try { await cloud.save(songId, ed.score.title, ed.json()); setSync(); }
+    try { await cloud.save(id, ed.score.title, ed.json()); clearPending(id); savedAt = Date.now(); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
+// Guardar al salir: cuando la app pasa a segundo plano (Android) o se cierra la pestaña.
+const flushSaves = () => {
+  if (!saveLocalT && !saveCloudT && !saveClaudeT) return;
+  saveLocalNow();
+  if (saveCloudT) scheduleCloudSave(0);
+  if (saveClaudeT) scheduleClaudeSave(0);
+};
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushSaves(); });
+window.addEventListener("pagehide", flushSaves);
 let cursorT = 0;
 function sendCursorSoon() {
   if (!live) return;
@@ -566,6 +596,9 @@ function startLive(id: string) {
   };
 }
 export async function openSong(id: string) {
+  flushSaves();
+  let recovered = false;
+  savedAt = 0;
   songId = id;
   isCloud = !ARTIFACT && !id.startsWith("local-");
   let json: string | null = null;
@@ -578,6 +611,12 @@ export async function openSong(id: string) {
       const row = await cloud.get(id);
       if (row) json = row.data;
       else toast("No encontré esa canción en la nube.", true);
+      // Recuperación: cambios que se guardaron en el teléfono pero no alcanzaron a subir.
+      const pend = pendingSince(id), local = loadLocalDoc(id);
+      if (row && pend && local && local !== row.data && pend > Date.parse(row.updated_at)) {
+        json = local; recovered = true;
+        toast("Recuperé cambios que no habían alcanzado a subir a la nube.");
+      }
     } catch (e) {
       toast((e as Error).message, true);
       setSync("Sin conexión con la nube", true);
@@ -590,6 +629,7 @@ export async function openSong(id: string) {
   PREFS.last = id; savePrefs();
   if (isCloud) startLive(id); else { live?.close(); live = null; ed.outbox = null; }
   setSync();
+  if (recovered) scheduleCloudSave(500);
   refresh();
 }
 /** Guarda una canción nueva donde corresponde (biblioteca de la cuenta, nube o teléfono) y la abre. */

@@ -1,5 +1,5 @@
 import * as at from "@coderline/alphatab";
-import { createSong, applyOp, finishScore, toJson, fromJson, rowToString, kindOf, settings, beatTicks, barCapacity, voiceUsed } from "../src/score/model";
+import { createSong, applyOp, finishScore, toJson, fromJson, rowToString, kindOf, settings, beatTicks, barCapacity, voiceUsed, metaMap, drumKit, fxMap, trackJson } from "../src/score/model";
 import { STYLES } from "../src/score/instruments";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -207,4 +207,52 @@ test("pedales y masterizado viajan con la canción", async () => {
   applyOp(back, { k: "master", fx: null });
   assert.equal(masterOf(back), null);
   assert.equal(fxMap(back)[0].drive, 5, "quitar el master no borra los efectos");
+});
+
+test("kit de batería: se guarda aparte y sigue a su pista", () => {
+  let s = createSong("hard_rock", 2, "Kits"); // guitarra, guitarra, bajo, batería power (kit 16)
+  const d = s.tracks.findIndex((t) => t.isPercussion);
+  assert.equal(drumKit(s, d), 16, "la plantilla trae su kit");
+  s = applyOp(s, { k: "trackProp", t: d, prop: "program", val: 25 }); finishScore(s);
+  assert.equal(s.tracks[d].playbackInfo.program, 0, "alphaTab fuerza 0 en la batería");
+  assert.equal(drumKit(s, d), 25, "pero el kit queda guardado");
+  s = applyOp(s, { k: "trackMove", t: d, to: 0 }); finishScore(s);
+  assert.equal(drumKit(s, 0), 25, "el kit se mueve con la pista");
+  s = applyOp(s, { k: "trackDel", t: 1 }); finishScore(s);
+  assert.equal(drumKit(s, 0), 25);
+  s = fromJson(toJson(s));
+  assert.equal(drumKit(s, 0), 25, "sobrevive al guardar");
+});
+
+test("menú de pista: duplicar, pegar de otra canción y reafinar sin cambiar el sonido", () => {
+  let s = createSong("hard_rock", 3, "Menú");
+  const str = rowToString(s.tracks[0], 5); // cuerda grave
+  applyOp(s, { k: "fret", t: 0, b: 0, v: 0, i: 0, str, fret: 5 });
+  s = applyOp(s, { k: "trackFx", t: 0, fx: { preset: "dist", drive: 6, low: 5, mid: 5, high: 5, comp: 0, chorus: 0, delay: 0, reverb: 0 } });
+  s = applyOp(s, { k: "trackMeta", t: 0, meta: { color: "#e5484d", locked: true } });
+  finishScore(s);
+  const n0 = s.tracks.length, pitch0 = s.tracks[0].staves[0].bars[0].voices[0].beats[0].notes[0].realValue;
+  s = applyOp(s, { k: "trackDup", t: 0 }); finishScore(s);
+  assert.equal(s.tracks.length, n0 + 1);
+  assert.equal(s.tracks[1].name, `${s.tracks[0].name} (copia)`);
+  assert.equal(s.tracks[1].staves[0].bars[0].voices[0].beats[0].notes[0].realValue, pitch0, "la copia trae las notas");
+  assert.equal(fxMap(s)[1]?.drive, 6, "y los efectos");
+  assert.equal(metaMap(s)[1]?.color, "#e5484d");
+  assert.ok(!metaMap(s)[1]?.locked, "la copia no queda bloqueada");
+  assert.ok(metaMap(s)[0]?.locked, "la original sigue bloqueada");
+  s = applyOp(s, { k: "trackDup", t: 1, empty: true }); finishScore(s);
+  assert.equal(s.tracks[2].staves[0].bars[0].voices[0].beats.flatMap((b) => b.notes).length, 0, "duplicar vacía no trae notas");
+  // Reafinar a Drop D: la nota debe sonar igual.
+  s = applyOp(s, { k: "retune", t: 1, tuning: [64, 59, 55, 50, 45, 38] }); finishScore(s);
+  assert.equal(s.tracks[1].staves[0].bars[0].voices[0].beats[0].notes[0].realValue, pitch0, "reafinar conserva el sonido");
+  // Pegar una pista de otra canción más larga: se ajusta a los compases de esta.
+  const other = createSong("indie", 6, "Otra");
+  const before = s.tracks.length;
+  s = applyOp(s, { k: "trackPaste", json: trackJson(other, 0), name: "Pegada" }); finishScore(s);
+  assert.equal(s.tracks.length, before + 1);
+  assert.equal(s.tracks[before].staves[0].bars.length, s.masterBars.length, "la pista pegada tiene los compases de esta canción");
+  const back = fromJson(toJson(s));
+  assert.equal(back.tracks.length, s.tracks.length);
+  const gp = new at.exporter.Gp7Exporter().export(s, settings);
+  assert.ok(gp.length > 1000, "exporta a Guitar Pro");
 });

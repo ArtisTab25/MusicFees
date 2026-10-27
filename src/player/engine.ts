@@ -262,11 +262,15 @@ export class Engine {
       this.api.tickPosition = beat.absolutePlaybackStart;
     } catch { /* aún sin reproductor */ }
   }
+  /** Oír cada nota al escribirla (preferencia del editor). */
+  hearNotes = true;
   playBeat(beat: at.model.Beat) {
+    if (!this.hearNotes) return;
     if (this.fx) { for (const n of beat.notes) this.playNote(n); return; }
     if (this.soundReady && !this.playing) try { this.api.playBeat(beat); } catch { /* sin sonido */ }
   }
   playNote(note: at.model.Note) {
+    if (!this.hearNotes) return;
     if (this.fx) {
       const tr = note.beat.voice.bar.staff.track, pi = tr.playbackInfo;
       const drum = tr.staves[0].isPercussion;
