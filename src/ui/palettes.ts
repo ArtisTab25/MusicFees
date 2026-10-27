@@ -1,17 +1,17 @@
 // Paletas tipo Guitar Pro que se abren sobre la barra (y sobre el teclado del teléfono).
 import * as at from "@coderline/alphatab";
 import type { Editor } from "../editor/editor";
-import { noteFxState, type NoteFx } from "../score/model";
+import { noteFxState, type BendShape, type NoteFx } from "../score/model";
 import { h, icon } from "./dom";
 
 const D = at.model.Duration;
-interface Ctx { toast: (m: string, err?: boolean) => void; close: () => void }
+interface Ctx { toast: (m: string, err?: boolean) => void; close: () => void; openTempo?: () => void }
 
 function pbtn(glyph: string, label: string, onClick: () => void, opts: { pressed?: boolean; cls?: string; text?: string } = {}) {
   return h("button", { class: "pbtn", title: label, "aria-label": label, "aria-pressed": opts.pressed ?? false, onclick: onClick },
     h("span", { class: opts.cls ?? "g" }, glyph), opts.text ? h("span", { class: "t" }, opts.text) : null);
 }
-function frame(title: string, ctx: Ctx, ...sections: HTMLElement[]) {
+function frame(title: string, ctx: Ctx, ...sections: (HTMLElement | null)[]) {
   return h("div", { class: "palette", role: "dialog", "aria-label": title },
     h("button", { class: "tbtn close", "aria-label": "Cerrar", onclick: ctx.close }, icon("close", 18)),
     ...sections);
@@ -28,7 +28,7 @@ export function buildPalettes(ed: Editor, ctx: Ctx): Record<string, () => HTMLEl
       const sectionIn = h("input", { type: "text", placeholder: "Nombre (Verso, Coro…)", "aria-label": "Nombre de la sección", value: mb.section?.text ?? "" });
       const nextLetter = () => String.fromCharCode(65 + ed.score.masterBars.filter((m, i) => m.section && i < ed.cursor.b).length);
       const setSection = (name: string) => ed.barProp("section", `${nextLetter()}|${name}`);
-      const tempoIn = h("input", { type: "number", min: 30, max: 300, value: Math.round(mb.tempoAutomation?.value ?? ed.score.tempo), "aria-label": "Tempo" });
+      const tempoIn = h("input", { type: "number", min: 20, max: 400, value: Math.round(ed.tempoHere), "aria-label": "Tempo" });
       const keySel = h("select", { "aria-label": "Armadura" },
         [-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7].map((k) => h("option", { value: k, selected: ed.bar.keySignature === k }, k === 0 ? "Sin alteraciones" : k > 0 ? `${k} ♯` : `${-k} ♭`)));
       keySel.onchange = () => ed.barProp("key", Number(keySel.value));
@@ -50,7 +50,10 @@ export function buildPalettes(ed: Editor, ctx: Ctx): Record<string, () => HTMLEl
             h("button", { class: "ghost", onclick: () => ed.barProp("section", null) }, "Quitar")),
           h("div", { class: "inline", style: "margin-top:6px" }, ["Intro", "Verso", "Pre-coro", "Coro", "Puente", "Solo", "Outro"].map((n) => h("button", { class: "ghost", style: "height:34px", onclick: () => setSection(n) }, n)))),
         h("div", null, h("h3", null, "Tempo y armadura desde este compás"),
-          h("div", { class: "inline" }, tempoIn, h("button", { class: "ghost", onclick: () => ed.barProp("tempo", Number(tempoIn.value)) }, "Cambiar tempo"), keySel)),
+          h("div", { class: "inline" }, tempoIn,
+            h("button", { class: "ghost", onclick: () => ed.setTempo(Number(tempoIn.value), "from") }, "Desde aquí"),
+            h("button", { class: "ghost", onclick: () => ed.setTempo(Number(tempoIn.value), "bar") }, "Solo este compás"),
+            h("button", { class: "ghost", onclick: () => ctx.openTempo?.() }, "Más (gradual, tap)…"), keySel)),
       );
     },
     note() {
@@ -98,6 +101,10 @@ export function buildPalettes(ed: Editor, ctx: Ctx): Record<string, () => HTMLEl
           pbtn("P", "Pop", () => ed.beatFx("pop"), { pressed: !!b?.pop, cls: "t", text: "pop" }),
           pbtn("⟋", "Fade in (volumen)", () => ed.beatFx("fadeIn"), { pressed: b?.fade === at.model.FadeType.FadeIn }),
           pbtn("≈", "Vibrato ancho (palanca)", () => ed.beatFx("vibratoBeat"), { pressed: b ? b.vibrato !== at.model.VibratoType.None : false })),
+        ed.kind === "tab" ? grid("Bend (estirar)",
+          ...([["½", "Medio tono", "half"], ["1", "Un tono", "full"], ["1½", "Tono y medio", "oneHalf"], ["2", "Dos tonos", "double"],
+            ["↗↘", "Bend y suelta", "release"], ["pre", "Pre-bend", "prebend"], ["pre↘", "Pre-bend y suelta", "prebendRelease"]] as [string, string, BendShape][])
+            .map(([g, l, shape]) => pbtn(g, l, () => { const m = ed.bend(shape); if (m) ctx.toast(m); }, { pressed: ed.bendShape === shape, cls: "t" }))) : null,
         h("p", { class: "note" }, "Los efectos se aplican a la nota de la cuerda elegida. Pulsa otra vez para quitarlos."),
       );
     },

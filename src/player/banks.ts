@@ -1,28 +1,13 @@
-// Bancos de sonido disponibles. La lista la escribe scripts/soundfonts.mjs al compilar:
-// si MuseScore_General no se pudo descargar, solo aparece GeneralUser GS.
-import { ARTIFACT, SOUNDFONT_URL } from "../config";
+// Bancos de sonido: uno incluido (carga en segundos) y otros que se descargan una vez y quedan
+// guardados en el dispositivo. La web, la APK y el artefacto usan el mismo mecanismo.
+import { SOUNDFONT_URL } from "../config";
+import { MUSESCORE, type Pack } from "./downloads";
 
-export interface Bank { id: string; name: string; file: string; mb: number; note: string }
+export interface Bank { id: string; name: string; mb: number; note: string; pack?: Pack }
 
-const FALLBACK: Bank = { id: "gu", name: "GeneralUser GS", file: "GeneralUser-GS.sf3", mb: 8, note: "Ligero, carga rápido" };
-
-export async function loadBanks(): Promise<Bank[]> {
-  if (ARTIFACT) return [FALLBACK];
-  try {
-    const r = await fetch(`${import.meta.env.BASE_URL}soundfont/banks.json`, { cache: "no-cache" });
-    if (!r.ok) throw new Error(String(r.status));
-    const list = (await r.json()) as Bank[];
-    return Array.isArray(list) && list.length ? list : [FALLBACK];
-  } catch {
-    return [FALLBACK];
-  }
-}
-
-export function bankUrl(b: Bank): string {
-  return b.id === "gu" ? SOUNDFONT_URL : `${import.meta.env.BASE_URL}soundfont/${b.file}`;
-}
-
-/** El banco guardado en preferencias si sigue disponible; si no, el primero (el más completo). */
-export function pickBank(list: Bank[], saved: unknown): Bank {
-  return list.find((b) => b.id === saved) ?? list[0];
-}
+export const BANKS: Bank[] = [
+  { id: "gu", name: "GeneralUser GS", mb: 8, note: "Incluido en la app. Carga en segundos." },
+  { id: "ms", name: MUSESCORE.name, mb: MUSESCORE.mb, note: MUSESCORE.note, pack: MUSESCORE },
+];
+export const BUILTIN_URL = SOUNDFONT_URL;
+export const bankById = (id: unknown) => BANKS.find((b) => b.id === id) ?? BANKS[0];

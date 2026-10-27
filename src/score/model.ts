@@ -40,7 +40,81 @@ export type Op =
   | { k: "chordDef"; t: number; id: string; name: string; frets: number[] }
   | { k: "lyrics"; t: number; text: string }
   | { k: "voices"; t: number; n: number }
-  | { k: "load"; json: string };
+  | { k: "load"; json: string }
+  /** Reescribe una voz completa de un compás (pegar, cortar, transponer). Notas con altura real. */
+  | { k: "setVoice"; t: number; b: number; v: number; beats: ClipBeat[] }
+  /** Efectos de una pista (null = sin efectos). Viajan con la canción. */
+  | { k: "trackFx"; t: number; fx: TrackFx | null }
+  | ({ k: "bend"; str: number; shape: BendShape } & BeatRef)
+  /** Cambios de tempo de un compás: posición dentro del compás (0–1) y bpm. Lista vacía = sin cambios. */
+  | { k: "tempo"; b: number; list: { r: number; bpm: number }[] }
+  /** Masterizado de la canción (null = sin masterizar). */
+  | { k: "master"; fx: MasterFx | null };
+
+/** Formas de bend que se escriben con un toque (valores en cuartos de tono: 4 = un tono). */
+export type BendShape = "none" | "half" | "full" | "oneHalf" | "double" | "release" | "prebend" | "prebendRelease";
+const BEND_SHAPES: Record<Exclude<BendShape, "none">, { type: number; pts: [number, number][] }> = {
+  half: { type: M.BendType.Bend, pts: [[0, 0], [15, 2], [60, 2]] },
+  full: { type: M.BendType.Bend, pts: [[0, 0], [15, 4], [60, 4]] },
+  oneHalf: { type: M.BendType.Bend, pts: [[0, 0], [15, 6], [60, 6]] },
+  double: { type: M.BendType.Bend, pts: [[0, 0], [15, 8], [60, 8]] },
+  release: { type: M.BendType.BendRelease, pts: [[0, 0], [12, 4], [30, 4], [45, 0], [60, 0]] },
+  prebend: { type: M.BendType.Prebend, pts: [[0, 4], [60, 4]] },
+  prebendRelease: { type: M.BendType.PrebendRelease, pts: [[0, 4], [30, 4], [60, 0]] },
+};
+export function setBend(n: Note, shape: BendShape) {
+  n.bendPoints = null;
+  n.bendType = M.BendType.None;
+  if (shape === "none") return;
+  const s = BEND_SHAPES[shape];
+  for (const [o, v] of s.pts) n.addBendPoint(new M.BendPoint(o, v));
+  n.bendType = s.type as at.model.BendType;
+}
+/** Reconoce la forma del bend de una nota (para resaltar el botón). */
+export function bendShapeOf(n: Note | null): BendShape {
+  if (!n?.hasBend || !n.bendPoints) return "none";
+  const pts = n.bendPoints.map((p) => [p.offset, p.value]);
+  for (const [k, s] of Object.entries(BEND_SHAPES)) if (JSON.stringify(s.pts) === JSON.stringify(pts)) return k as BendShape;
+  return "full";
+}
+
+/** Cadena de efectos de una pista. Escalas de 0 a 10 (EQ: 5 = plano). `pedals`: efectos extra en serie (Tone.js). */
+export interface TrackFx { preset: string; drive: number; low: number; mid: number; high: number; comp: number; chorus: number; delay: number; reverb: number; pedals?: Pedal[]; plugins?: PluginRef[] }
+/** Plugin WAM 2.0 de terceros: dirección de su módulo (del catálogo o externa) y su estado guardado. */
+export interface PluginRef { src: string; name: string; state?: unknown }
+export type PedalType = "phaser" | "tremolo" | "wah" | "autofilter" | "vibrato" | "pingpong" | "octave" | "widener" | "autopan" | "harmonic" | "spring";
+/** Un pedal: mezcla (0–10) y dos perillas (0–10) cuyo significado depende del tipo. */
+export interface Pedal { type: PedalType; mix: number; a: number; b: number }
+/** Masterizado: EQ (5 = plano), pegamento (compresión), ancho estéreo (5 = normal), volumen final y techo. */
+export interface MasterFx { preset: string; low: number; mid: number; high: number; glue: number; width: number; loud: number }
+// alphaTab no guarda campos propios: los efectos van en «notices» de la canción, en una línea marcada.
+const FX_TAG = "MFFX1:", MS_TAG = "MFMS1:";
+export function masterOf(score: Score): MasterFx | null {
+  const line = (score.notices || "").split("\n").find((l) => l.startsWith(MS_TAG));
+  if (!line) return null;
+  try { return JSON.parse(line.slice(MS_TAG.length)) as MasterFx; } catch { return null; }
+}
+function writeMaster(score: Score, m: MasterFx | null) {
+  const rest = (score.notices || "").split("\n").filter((l) => l && !l.startsWith(MS_TAG));
+  if (m) rest.push(MS_TAG + JSON.stringify(m));
+  score.notices = rest.join("\n");
+}
+export function fxMap(score: Score): Record<number, TrackFx> {
+  const line = (score.notices || "").split("\n").find((l) => l.startsWith(FX_TAG));
+  if (!line) return {};
+  try { return JSON.parse(line.slice(FX_TAG.length)) as Record<number, TrackFx>; } catch { return {}; }
+}
+function writeFx(score: Score, map: Record<number, TrackFx>) {
+  const rest = (score.notices || "").split("\n").filter((l) => l && !l.startsWith(FX_TAG));
+  if (Object.keys(map).length) rest.push(FX_TAG + JSON.stringify(map));
+  score.notices = rest.join("\n");
+}
+
+/** Nota independiente del instrumento: altura real (o pieza de batería por su número MIDI). */
+export interface ClipNote { pitch?: number; str?: number; fret?: number; drum?: number; fx: NoteFx[]; bend?: { type: number; pts: [number, number][] } }
+/** Tiempo independiente del instrumento, para el portapapeles y la operación setVoice. */
+export interface ClipBeat { dur: number; dots: number; tup: number; notes: ClipNote[]; text?: string | null; dyn?: number }
+export const NOTE_FX_ALL: NoteFx[] = ["hammer", "slide", "bend", "vibrato", "palmMute", "letRing", "dead", "ghost", "accent", "heavyAccent", "harmonic", "staccato", "tie"];
 
 export type NoteFx = "hammer" | "slide" | "bend" | "vibrato" | "palmMute" | "letRing" | "dead" | "ghost" | "accent" | "heavyAccent" | "harmonic" | "staccato" | "tie";
 export type BeatFx = "dynamics" | "crescendo" | "tap" | "slap" | "pop" | "text" | "chord" | "pickStroke" | "fadeIn" | "brush" | "vibratoBeat";
@@ -98,9 +172,84 @@ function relinkBeats(voice: at.model.Voice) {
     voice.addBeat(b);
   }
 }
+// En alphaTab realValue = octave × 12 + tone. Antes se restaba 1 a la octava y cada nota de teclado
+// sonaba y se escribía una octava abajo de la tecla tocada (y tocarla otra vez no la quitaba).
 function setPitchOnNote(n: Note, midi: number) {
-  n.octave = Math.floor(midi / 12) - 1;
+  n.octave = Math.floor(midi / 12);
   n.tone = midi % 12;
+}
+
+// ---------- portapapeles: del modelo de alphaTab a tiempos neutros y de vuelta ----------
+/** Altura real de una cuerda (sin capo): la afinación va de aguda a grave y la cuerda 1 es la más grave. */
+const stringPitch = (track: Track, str: number) => track.staves[0].tuning[track.staves[0].tuning.length - str];
+
+export function beatToClip(track: Track, beat: Beat): ClipBeat {
+  const kind = kindOf(track);
+  return {
+    dur: beat.duration, dots: beat.dots, tup: beat.hasTuplet ? beat.tupletNumerator : 0,
+    text: beat.text ?? null, dyn: dynIndex(beat.dynamics),
+    notes: beat.notes.map((n) => {
+      const fx = NOTE_FX_ALL.filter((f) => f !== "bend" && noteFxState(n, f));
+      const bend = n.hasBend && n.bendPoints ? { type: n.bendType as number, pts: n.bendPoints.map((p) => [p.offset, p.value] as [number, number]) } : undefined;
+      if (kind === "drums") return { drum: track.percussionArticulations[n.percussionArticulation]?.outputMidiNumber ?? n.percussionArticulation, fx };
+      if (kind === "tab") return { pitch: stringPitch(track, n.string) + n.fret, str: n.string, fret: n.fret, fx, bend };
+      return { pitch: n.realValue, fx, bend };
+    }),
+  };
+}
+
+/** Cuerda y traste para una altura: respeta la cuerda original si se puede; si no, la posición más cercana. */
+function placeOnStrings(track: Track, cn: ClipNote, taken: Set<number>): { str: number; fret: number } | null {
+  const n = track.staves[0].tuning.length;
+  if (cn.pitch == null) return null;
+  if (cn.str != null && cn.str >= 1 && cn.str <= n && !taken.has(cn.str)) {
+    const f = cn.pitch - stringPitch(track, cn.str);
+    if (f >= 0 && f <= 24) return { str: cn.str, fret: f };
+  }
+  let best: { str: number; fret: number } | null = null;
+  const want = cn.fret ?? 3;
+  for (let s = 1; s <= n; s++) {
+    if (taken.has(s)) continue;
+    const f = cn.pitch - stringPitch(track, s);
+    if (f < 0 || f > 24) continue;
+    if (!best || Math.abs(f - want) < Math.abs(best.fret - want)) best = { str: s, fret: f };
+  }
+  return best;
+}
+
+/** Construye un tiempo de alphaTab para la pista destino. Las notas que no caben (fuera de rango, batería ↔ melodía) se omiten. */
+function clipToBeat(track: Track, cb: ClipBeat): Beat {
+  const b = newRestBeat(cb.dur, cb.dots);
+  if (cb.tup > 1) { b.tupletNumerator = cb.tup; b.tupletDenominator = cb.tup === 3 ? 2 : 4; }
+  if (cb.text) b.text = cb.text;
+  if (cb.dyn != null) b.dynamics = dynValue(cb.dyn);
+  const kind = kindOf(track);
+  const taken = new Set<number>(), pitches = new Set<number>();
+  // De aguda a grave: las notas altas toman primero las cuerdas agudas.
+  for (const cn of cb.notes.slice().sort((x, y) => (y.pitch ?? 0) - (x.pitch ?? 0))) {
+    const n = new M.Note();
+    if (kind === "drums") {
+      if (cn.drum == null) continue;
+      const idx = track.percussionArticulations.findIndex((a) => a.outputMidiNumber === cn.drum);
+      if (idx < 0) continue;
+      n.percussionArticulation = idx;
+    } else if (kind === "tab") {
+      const p = placeOnStrings(track, cn, taken);
+      if (!p) continue;
+      taken.add(p.str);
+      n.string = p.str;
+      n.fret = p.fret;
+    } else {
+      if (cn.pitch == null || pitches.has(cn.pitch)) continue;
+      pitches.add(cn.pitch);
+      setPitchOnNote(n, cn.pitch);
+    }
+    n.dynamics = b.dynamics;
+    b.addNote(n);
+    for (const fx of cn.fx) applyNoteFx(n, fx, true);
+    if (cn.bend && kind !== "drums") { for (const [o, v] of cn.bend.pts) n.addBendPoint(new M.BendPoint(o, v)); n.bendType = cn.bend.type as at.model.BendType; }
+  }
+  return b;
 }
 
 // ---------- creación ----------
@@ -240,6 +389,22 @@ function deleteBar(score: Score, atIndex: number) {
       per.set(st, list);
     }
   rebuildBars(score, mbs, per);
+}
+/** Tempo vigente en un punto (compás y posición 0–1 dentro del compás). */
+export function tempoAt(score: Score, b: number, r = 0): number {
+  for (let i = Math.min(b, score.masterBars.length - 1); i >= 0; i--) {
+    const list = score.masterBars[i].tempoAutomations.filter((a) => a.type === M.AutomationType.Tempo && (i < b || a.ratioPosition <= r + 1e-6));
+    if (list.length) return list.reduce((x, y) => (y.ratioPosition >= x.ratioPosition ? y : x)).value;
+  }
+  return 120;
+}
+/** Todos los cambios de tempo de la canción, en orden. */
+export function tempoChanges(score: Score) {
+  const out: { b: number; r: number; bpm: number }[] = [];
+  score.masterBars.forEach((mb, b) => {
+    for (const a of mb.tempoAutomations) if (a.type === M.AutomationType.Tempo) out.push({ b, r: a.ratioPosition, bpm: a.value });
+  });
+  return out.sort((x, y) => x.b - y.b || x.r - y.r);
 }
 function setTempo(score: Score, b: number, bpm: number) {
   const mb = score.masterBars[b];
@@ -457,8 +622,37 @@ export function applyOp(score: Score, op: Op): Score {
       break;
     }
     case "trackAdd": addTrack(score, op.preset, op.name, op.tuning); break;
+    case "bend": {
+      const beat = beatAt(score, op);
+      const n = beat?.notes.find((x) => x.string === op.str);
+      if (n) setBend(n, op.shape);
+      break;
+    }
+    case "tempo": {
+      const mb = score.masterBars[op.b];
+      if (!mb) break;
+      const initial = score.tempo || 120;
+      mb.tempoAutomations = mb.tempoAutomations.filter((a) => a.type !== M.AutomationType.Tempo);
+      const list = op.list.slice().sort((x, y) => x.r - y.r);
+      // El primer compás siempre lleva el tempo inicial.
+      if (op.b === 0 && !list.some((x) => x.r === 0)) list.unshift({ r: 0, bpm: initial });
+      for (const x of list) mb.tempoAutomations.push(M.Automation.buildTempoAutomation(false, Math.max(0, Math.min(0.999, x.r)), Math.max(20, Math.min(400, Math.round(x.bpm))), 2, x.r === 0));
+      break;
+    }
+    case "master": writeMaster(score, op.fx); break;
+    case "trackFx": {
+      const map = fxMap(score);
+      if (op.fx) map[op.t] = op.fx; else delete map[op.t];
+      writeFx(score, map);
+      break;
+    }
     case "trackDel": {
       if (score.tracks.length <= 1) break;
+      { // los efectos siguen a su pista
+        const map = fxMap(score), next: Record<number, TrackFx> = {};
+        for (const [k, v] of Object.entries(map)) { const i = Number(k); if (i < op.t) next[i] = v; else if (i > op.t) next[i - 1] = v; }
+        writeFx(score, next);
+      }
       score.tracks.splice(op.t, 1);
       score.tracks.forEach((t, i) => (t.index = i));
       break;
@@ -466,6 +660,15 @@ export function applyOp(score: Score, op: Op): Score {
     case "trackMove": {
       const [tr] = score.tracks.splice(op.t, 1);
       if (!tr) break;
+      {
+        const map = fxMap(score);
+        const ids = Array.from({ length: score.tracks.length + 1 }, (_, i) => i);
+        const [moved] = ids.splice(op.t, 1);
+        ids.splice(Math.max(0, Math.min(op.to, ids.length)), 0, moved);
+        const next: Record<number, TrackFx> = {};
+        ids.forEach((oldIdx, newIdx) => { if (map[oldIdx]) next[newIdx] = map[oldIdx]; });
+        writeFx(score, next);
+      }
       score.tracks.splice(Math.max(0, Math.min(op.to, score.tracks.length)), 0, tr);
       score.tracks.forEach((t, i) => (t.index = i));
       break;
@@ -525,6 +728,21 @@ export function applyOp(score: Score, op: Op): Score {
           b.isEmpty = true;
           v.addBeat(b);
         }
+      break;
+    }
+    case "setVoice": {
+      const tr = score.tracks[op.t];
+      const bar = tr?.staves[0]?.bars[op.b];
+      if (!bar) break;
+      while (bar.voices.length <= op.v) {
+        const v = new M.Voice();
+        bar.addVoice(v);
+      }
+      const voice = bar.voices[op.v];
+      const beats = op.beats.length ? op.beats.map((cb) => clipToBeat(tr, cb)) : [newRestBeat(M.Duration.Whole)];
+      if (!op.beats.length) beats[0].isEmpty = true;
+      voice.beats.length = 0;
+      for (const b of beats) voice.addBeat(b);
       break;
     }
     case "lyrics": {

@@ -136,41 +136,80 @@ export async function exportPdf(score: Score, tracks: number[], onProgress: (msg
   }
 }
 
-let sfCache: { url: string; bytes: Uint8Array } | null = null;
+
 /** Audio: sintetiza la canción completa fuera de tiempo real con el mismo banco de sonidos. */
-export async function exportAudio(api: at.AlphaTabApi, score: Score, format: "mp3" | "wav", opts: { metronome: boolean; perTrack: boolean; quality: number; soundFontUrl: string }, onProgress: (msg: string) => void) {
-  if (sfCache?.url !== opts.soundFontUrl) {
-    onProgress("Cargando el banco de sonidos…");
-    sfCache = { url: opts.soundFontUrl, bytes: new Uint8Array(await (await fetch(opts.soundFontUrl)).arrayBuffer()) };
+/** Sintetiza fuera de tiempo real las pistas indicadas (las demás en silencio). Estéreo intercalado, 44.1 kHz. */
+async function renderTracks(api: at.AlphaTabApi, score: Score, sf: Uint8Array, list: number[], metronome: boolean, onPct: (pct: number) => void): Promise<Float32Array> {
+  const o = new at.synth.AudioExportOptions();
+  o.soundFonts = [sf];
+  o.sampleRate = SR;
+  o.masterVolume = 1;
+  o.metronomeVolume = metronome ? 1 : 0;
+  for (const t of score.tracks) o.trackVolume.set(t.index, list.includes(t.index) ? 1 : 0);
+  const exp = await api.exportAudio(o);
+  const chunks: Float32Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const c = await exp.render(2000);
+      if (!c) break;
+      chunks.push(c.samples);
+      total += c.samples.length;
+      onPct(c.endTime ? Math.round((c.currentTime / c.endTime) * 100) : 0);
+    }
+  } finally { exp.destroy(); }
+  const inter = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks) { inter.set(c, off); off += c.length; }
+  return inter;
+}
+const SR = 44100;
+
+export interface AudioOpts {
+  metronome: boolean; perTrack: boolean; quality: number;
+  soundFont: () => Promise<Uint8Array>;
+  /** Con efectos y masterizado (usa las cadenas de Tone.js de la canción). */
+  studio: boolean;
+}
+export async function exportAudio(api: at.AlphaTabApi, score: Score, format: "mp3" | "wav", opts: AudioOpts, onProgress: (msg: string) => void) {
+  onProgress("Cargando el banco de sonidos…");
+  const sf = await opts.soundFont();
+  const save = async (inter: Float32Array, label: string | null) => {
+    const name = `${safeName(score.title)}${label ? " - " + safeName(label) : ""}`;
+    if (format === "wav") await download(toWav(inter, SR), `${name}.wav`, "audio/wav");
+    else await download(await toMp3(inter, SR, opts.quality, (p) => onProgress(`Codificando MP3… ${p}%`)), `${name}.mp3`, "audio/mpeg");
+  };
+  const tracks = score.tracks.map((t) => t.index);
+  if (opts.studio) {
+    // Cada pista por separado → su cadena de efectos → suma → masterizado.
+    const { processTrack, processMaster, mixInto } = await import("./studioExport");
+    const { fxMap, masterOf } = await import("../score/model");
+    const fx = fxMap(score);
+    const soloOn = score.tracks.some((t) => t.playbackInfo.isSolo);
+    const audible = score.tracks.filter((t) => !t.playbackInfo.isMute && (!soloOn || t.playbackInfo.isSolo));
+    let mix: Float32Array | null = null;
+    for (const [n, t] of audible.entries()) {
+      const step = `${n + 1}/${audible.length}: ${t.name}`;
+      const dry = await renderTracks(api, score, sf, [t.index], false, (p) => onProgress(`Pista ${step}… ${p} %`));
+      onProgress(`Efectos de ${t.name}…`);
+      const wet = await processTrack(dry, SR, fx[t.index] ?? null, t.playbackInfo.volume / 16 * 1.25);
+      if (opts.perTrack) await save(wet, t.name);
+      else mix = mixInto(mix, wet);
+    }
+    if (!opts.perTrack && mix) {
+      onProgress("Masterizando…");
+      let out: Float32Array = await processMaster(mix, SR, masterOf(score));
+      // El metrónomo se suma al final, limpio (sin efectos ni masterizado).
+      if (opts.metronome) out = mixInto(out, await renderTracks(api, score, sf, [], true, (p) => onProgress(`Metrónomo… ${p} %`)));
+      await save(out, null);
+    }
+    return;
   }
-  const targets = opts.perTrack ? score.tracks.map((t) => [t.index]) : [score.tracks.map((t) => t.index)];
+  const targets = opts.perTrack ? tracks.map((t) => [t]) : [tracks];
   for (const [n, list] of targets.entries()) {
-    const label = opts.perTrack ? score.tracks[list[0]].name : "mezcla";
-    const o = new at.synth.AudioExportOptions();
-    o.soundFonts = [sfCache.bytes];
-    o.sampleRate = 44100;
-    o.masterVolume = 1;
-    o.metronomeVolume = opts.metronome ? 1 : 0;
-    for (const t of score.tracks) o.trackVolume.set(t.index, list.includes(t.index) ? 1 : 0);
-    const exp = await api.exportAudio(o);
-    const chunks: Float32Array[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const c = await exp.render(2000);
-        if (!c) break;
-        chunks.push(c.samples);
-        total += c.samples.length;
-        const pct = c.endTime ? Math.round((c.currentTime / c.endTime) * 100) : 0;
-        onProgress(`Generando audio${opts.perTrack ? ` (${n + 1}/${targets.length}: ${label})` : ""}… ${pct}%`);
-      }
-    } finally { exp.destroy(); }
-    const inter = new Float32Array(total);
-    let off = 0;
-    for (const c of chunks) { inter.set(c, off); off += c.length; }
-    const name = `${safeName(score.title)}${opts.perTrack ? " - " + safeName(label) : ""}`;
-    if (format === "wav") await download(toWav(inter, 44100), `${name}.wav`, "audio/wav");
-    else await download(await toMp3(inter, 44100, opts.quality, (p) => onProgress(`Codificando MP3… ${p}%`)), `${name}.mp3`, "audio/mpeg");
+    const label = opts.perTrack ? score.tracks[list[0]].name : null;
+    const inter = await renderTracks(api, score, sf, list, opts.metronome, (p) => onProgress(`Generando audio${label ? ` (${n + 1}/${targets.length}: ${label})` : ""}… ${p} %`));
+    await save(inter, label);
   }
 }
 

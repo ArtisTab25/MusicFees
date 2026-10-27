@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.2** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 0.6** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -12,11 +12,51 @@ Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el telé
 - **Sonido**: dos bancos a elegir en menú → Sonido → Banco de sonidos: **MuseScore General** (38 MB, el predeterminado, mucho más realista) y **GeneralUser GS** (8 MB, ligero). Mezclador por pista (volumen, paneo, silencio y solo), metrónomo, cuenta inicial, bucle y velocidad.
 - **Teclado propio en pantalla** (predeterminado en el celular): trastes 0–9, avanzar, retroceder, siguiente compás, borrar, silencio, deshacer y duraciones. También se puede escribir con el teclado del teléfono o con uno físico; ver la tabla de atajos abajo.
 - **Paletas tipo Guitar Pro** sobre el teclado: compás, nota y dinámica, efectos y texto.
+- **Selección, copiar, cortar, pegar y transponer**: tiempos sueltos o compases completos, también de guitarra a piano o entre canciones (las notas conservan su altura real y se reacomodan en las cuerdas del destino). Transponer ±½ tono u octava en la selección o en toda la pista.
 - **Biblioteca de acordes** con posiciones calculadas para guitarra y voicings para teclados.
 - **Letra** bajo las notas, por sílabas.
 - **Exportar**: Guitar Pro (.gp), MIDI, PDF, MP3 y WAV (mezcla completa o un archivo por pista).
 - **Importar**: Guitar Pro 3 a 8 (.gp3, .gp4, .gp5, .gpx, .gp) y MusicXML.
 - **Dúo en vivo**: comparte un enlace y edita la misma hoja al mismo tiempo. Se ve el cursor de la otra persona y sus cambios aparecen al instante.
+
+## Cuentas y biblioteca (0.4)
+
+1. En Supabase → SQL Editor, ejecuta una vez `supabase/migrations/002_cuentas.sql` (después de 001).
+2. Abre la app: la primera vez pide **crear la cuenta de administrador**.
+3. Menú → Archivo → Biblioteca → **Usuarios**: crea las cuentas (por ejemplo `USUARIO 1` / `12345`). Desde ahí también se cambian contraseñas y se borran cuentas.
+4. Cada cuenta ve sus canciones en cualquier dispositivo. «Usar sin cuenta» guarda solo en el dispositivo. Los enlaces del dúo siguen funcionando sin cuenta.
+
+Las cuentas son propias de MusicFees (usuario y contraseña, sin correo); las contraseñas se guardan con bcrypt y las tablas solo se tocan a través de funciones.
+
+En el artefacto de Claude la biblioteca usa la cuenta de Claude de cada persona (no hay contraseñas).
+
+## Tempo
+
+El botón **♩ = …** de la barra de reproducción (siempre visible) abre el editor de tempo: «Desde aquí» (desde el tiempo del cursor), «Solo este compás» (después vuelve el anterior), «Tempo inicial», cambio gradual (accelerando o ritardando repartido tiempo por tiempo hasta el compás que digas), tap tempo y la lista de cambios de la canción. También está en la paleta de compás y en menú → Sonido → Tempo.
+
+## Motor de estudio: efectos, pedales y masterizado
+
+Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.0) para sonar con salida separada por canal y **Tone.js** (MIT) para las cadenas:
+
+- **Por pista** (Sets → Pista → Efectos): amplificador con distorsión y gabinete, EQ de 3 bandas, compresor, chorus, delay y reverb, con presets por género, más hasta **4 pedales** en serie: phaser, trémolo, auto-wah, filtro barrido, vibrato, delay ping-pong, octavador/pitch, ensanchador estéreo, auto-pan, saturación armónica y reverb de resorte.
+- **Masterizado** (menú → Sonido → Masterizado): EQ, compresión «pegamento», ancho estéreo, volumen final, limitador y recorte suave con techo de −0.8 dB, con medidor de nivel y presets (natural, rock, cálido, brillante, acústico, radio).
+- **Exportar MP3/WAV con efectos y masterizado**: cada pista se procesa por su cadena fuera de tiempo real y la mezcla pasa por el master. Tarda más que la exportación en seco.
+
+- **Plugins de terceros (WAM 2.0)** (Sets → Pista → Efectos → Plugins): hasta 3 plugins Web Audio Modules por pista, con su propia ventana de controles. Vienen incluidos Simple Distortion, Delay y Simple EQ de burns-audio (MIT, ver `public/wam/NOTICE.txt`), y se puede cargar cualquier otro WAM 2.0 por URL (el servidor del plugin debe permitir CORS). Los ajustes del plugin se guardan con la canción y también suenan al exportar.
+- **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
+
+Todo se guarda con la canción.
+
+## Bancos de sonido y APK
+
+- GeneralUser GS viene incluido y carga en segundos.
+- MuseScore General (38 MB) se descarga desde menú → Sonido → Banco de sonidos y queda guardado en el dispositivo.
+- La APK no lo incluye: se compila con `MF_APK=1` y la app lo descarga del sitio publicado.
+- **La Action que descomprime el zip no puede tocar `.github/`.** Para compilar la APK en GitHub, crea a mano `.github/workflows/android.yml` (Add file → Create new file) con el contenido de ese archivo en este proyecto. Cada compilación queda en Releases → «apk».
+
+## Artefacto de Claude
+
+`npm run build:artifact` arma `dist-artifact/` (MuseScore en tres partes de menos de 15 MB, archivos binarios con extensión .ogg) y `dist-artifact/files.json` con el mapa para publicar.
 
 ## Atajos de teclado
 
@@ -36,6 +76,10 @@ Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el telé
 | H D E V | Ligado, deslizar, bend, vibrato |
 | P L X G | Palm mute, dejar sonar, nota muerta, nota fantasma |
 | T M I U | Tapping, armónico, staccato, ligadura con la nota anterior |
+| Mayús + ← → / Mayús + clic | Seleccionar tiempos (en el celular: mantener el dedo sobre un tiempo, o ⬚ en el teclado) |
+| Ctrl + C / X / V | Copiar, cortar (deja silencios) y pegar; funciona entre pistas y entre canciones |
+| Ctrl + A | Seleccionar toda la pista |
+| Esc | Quitar la selección |
 
 En las pistas de teclado se toca la franja de piano y los números 1 2 4 8 6 3 cambian la duración. En las de batería se tocan las piezas del kit.
 
@@ -76,4 +120,4 @@ Al hacer push a `main`, el workflow `.github/workflows/pages.yml` prueba, compil
 
 ## Licencias de terceros
 
-alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0).
+alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0) · Tone.js (MIT) · spessasynth_lib (Apache-2.0) · @webaudiomodules/sdk (MIT) · plugins WAM de burns-audio (MIT).

@@ -1,0 +1,60 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Descomprimir zip"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Compilar la web (sin bancos grandes: la app los descarga)
+        env:
+          MF_APK: "1"
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+      - name: Compilar APK firmado
+        env:
+          MF_VERSION_CODE: ${{ github.run_number }}
+          MF_VERSION_NAME: 0.6.${{ github.run_number }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../MusicFees.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MusicFees-apk
+          path: MusicFees.apk
+      - name: Publicar en Releases (descarga directa)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk MusicFees.apk --title "MusicFees APK (compilación ${{ github.run_number }})" \
+            --notes "Instala MusicFees.apk en tu Android. Cada compilación reemplaza a la anterior y se instala encima." --latest

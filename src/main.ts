@@ -3,8 +3,9 @@ import * as at from "@coderline/alphatab";
 import { Engine } from "./player/engine";
 import { Editor } from "./editor/editor";
 import { KeyInput } from "./editor/keys";
-import { createSong, fromJson, toJson, finishScore, kindOf } from "./score/model";
+import { createSong, fromJson, toJson, finishScore, kindOf, fxMap, masterOf } from "./score/model";
 import { Cloud, LiveSession, clientId, loadLocalDoc, localList, rememberSong, saveLocalDoc, type Peer } from "./collab/cloud";
+import { ClaudeLibrary } from "./collab/claudeLib";
 import { h, $, icon } from "./ui/dom";
 import { ARTIFACT, NO_CLOUD_MSG, PUBLIC_URL } from "./config";
 import { Capacitor } from "@capacitor/core";
@@ -12,7 +13,9 @@ import { buildPalettes } from "./ui/palettes";
 import { Sheets } from "./ui/sheets";
 import { midiName, pcName } from "./score/chords";
 import { DRUM_PIECES, LATIN_PIECES } from "./score/instruments";
-import { bankUrl, loadBanks, pickBank, type Bank } from "./player/banks";
+import { BANKS, BUILTIN_URL, bankById, type Bank } from "./player/banks";
+import { downloadPack, getPack, hasPack } from "./player/downloads";
+import { adaptForAlphaTab } from "../scripts/sfadapt.mjs";
 import { buildKeypad } from "./ui/keypad";
 
 const DUR_GLYPH: Record<number, string> = { 1: "𝅝", 2: "𝅗𝅥", 4: "♩", 8: "♪", 16: "𝅘𝅥𝅯", 32: "𝅘𝅥𝅰", 64: "𝅘𝅥𝅱" };
@@ -52,22 +55,51 @@ export function toast(msg: string, err = false) {
 }
 
 // ---------- motor y editor ----------
-// La lista de bancos (banks.json) se lee antes de crear el motor para cargar el banco correcto a la primera.
-const BANKS = await loadBanks();
-let bank: Bank = pickBank(BANKS, PREFS.bank);
+// Arranca con el banco incluido; si el usuario eligió uno descargado y está guardado, ese.
+let bank: Bank = bankById(PREFS.bank);
+/** Banco original (lo usa el motor de efectos); alphaTab recibe una copia adaptada. */
+let bankOriginal: Uint8Array | null = null;
+if (bank.pack) { bankOriginal = await getPack(bank.pack).catch(() => null); if (!bankOriginal) bank = BANKS[0]; }
+const forAlphaTab = (b: Uint8Array) => { try { return adaptForAlphaTab(b).bytes; } catch { return b; } };
+const startBytes = bankOriginal ? forAlphaTab(bankOriginal) : null;
 // En pantallas anchas la partitura arranca más grande (en el celular, 85 %).
-const engine = new Engine(scoreEl, scoreWrap, PREFS.zoom ?? (innerWidth >= 900 ? 1.1 : 0.85), bankUrl(bank));
-function setBank(id: string) {
-  const b = BANKS.find((x) => x.id === id);
-  if (!b || b.id === bank.id) return;
+const engine = new Engine(scoreEl, scoreWrap, PREFS.zoom ?? (innerWidth >= 900 ? 1.1 : 0.85), startBytes ?? BUILTIN_URL);
+// ---------- efectos por pista ----------
+const fxTracks = () => {
+  const map = fxMap(ed.score);
+  return ed.score.tracks.map((t) => ({ index: t.index, channels: [t.playbackInfo.primaryChannel, t.playbackInfo.secondaryChannel], fx: map[t.index] ?? null, mute: t.playbackInfo.isMute, solo: t.playbackInfo.isSolo }));
+};
+/** Activa o apaga el motor con efectos. Usa el banco elegido, sin la adaptación para alphaTab. */
+async function setFx(on: boolean) {
+  if (on === !!engine.fx) return;
+  if (!on) { engine.disableFx(); PREFS.fx = false; savePrefs(); refresh(); return; }
+  syncEl.textContent = "Preparando efectos…";
+  try {
+    const sf = bankOriginal ?? new Uint8Array(await (await fetch(BUILTIN_URL)).arrayBuffer());
+    await engine.enableFx(sf, fxTracks, masterOf(ed.score));
+    PREFS.fx = true; savePrefs();
+    setSync(); refresh();
+  } catch (e) { setSync(`No se pudieron activar los efectos: ${(e as Error).message}`, true); }
+}
+/** Cambia de banco. Si hay que descargarlo, muestra el avance con `onProgress`. */
+async function setBank(id: string, onProgress: (pct: number) => void = () => {}) {
+  const b = bankById(id);
+  if (b.id === bank.id) return;
+  if (b.pack) {
+    bankOriginal = await downloadPack(b.pack, onProgress);
+    engine.setSoundFont(forAlphaTab(bankOriginal));
+  } else { bankOriginal = null; engine.setSoundFont(BUILTIN_URL); }
   bank = b; PREFS.bank = b.id; savePrefs();
-  engine.setSoundFont(bankUrl(b));
-  toast(`Cargando ${b.name} (${b.mb} MB)…`);
+  toast(`Preparando ${b.name}…`);
+  if (engine.fx) { engine.disableFx(); await setFx(true); } // el motor con efectos también cambia de banco
 }
 if (PREFS.layout === "h") engine.setLayout(false);
 const ed = new Editor(createSong("blank_gtr", 8), engine);
 const keys = new KeyInput(ed, (m) => toast(m));
 const cloud = new Cloud();
+/** En el artefacto la biblioteca vive en la cuenta de Claude de cada persona. */
+const claudeLib = ARTIFACT ? new ClaudeLibrary() : null;
+const isClaudeId = (id: string | null) => !!id && id.startsWith("claude-");
 let songId: string | null = null;
 let live: LiveSession | null = null;
 let isCloud = false;
@@ -105,10 +137,7 @@ const btnPad = tb("keypad", "Teclado de MusicFees", () => {
   if (inputMode === "kbd") setInputMode("pad");
   else showPad(!document.body.classList.contains("pad-on"));
 });
-const pad = buildKeypad(ed, {
-  native: () => { setInputMode("kbd"); keys.focus(); toast("Teclado del teléfono. Para volver al de MusicFees toca el botón de teclado en la barra."); },
-  hide: () => showPad(false),
-});
+const pad = buildKeypad(ed, { hide: () => showPad(false), toast: (m) => toast(m) });
 function showPad(on: boolean) {
   document.body.classList.toggle("pad-on", on);
   btnPad.setAttribute("aria-pressed", String(on));
@@ -118,25 +147,34 @@ function setInputMode(m: "pad" | "kbd") {
   inputMode = m; PREFS.input = m; savePrefs();
   if (m === "pad") { keys.blur(); showPad(true); } else showPad(false);
 }
-const btnKbd = tb("keyboard", "Teclado del teléfono", () => { if (inputMode === "pad") setInputMode("kbd"); keys.focus(); });
-const r1 = h("div", { class: "row r1" }, btnPad, voiceSeg, btnView, btnLyrics, btnChords, greens);
+const btnKbd = tb("keyboard", "Teclado del teléfono", () => {
+  if (inputMode === "pad") { setInputMode("kbd"); toast("Teclado del teléfono. Para volver al de MusicFees toca ▦."); }
+  keys.focus();
+});
+const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnView, btnLyrics, btnChords, greens);
 const btnCompact = tb("chevronDown", "Ocultar o mostrar filas", () => { document.body.classList.toggle("compact"); PREFS.compact = document.body.classList.contains("compact"); savePrefs(); });
 const r2 = h("div", { class: "row r2" },
   tb("home", "Ir al inicio", () => { ed.setCursor({ b: 0, i: 0 }); scoreWrap.scrollTo({ top: 0 }); }),
   btnLayout,
   tb("zoomOut", "Alejar", () => setZoom(-0.1)), zoomVal, tb("zoomIn", "Acercar", () => setZoom(0.1)),
-  btnUndo, btnRedo, btnKbd, btnCompact);
+  btnUndo, btnRedo, btnCompact);
 
 const btnCount = tb("countin", "Cuenta antes de tocar", () => { engine.countIn = engine.countIn > 0 ? 0 : 1; refresh(); });
 const btnLoop = tb("loop", "Repetir", () => { engine.loop = !engine.loop; refresh(); });
 const speedVal = h("span", { class: "zoomv" }, "100%");
 const btnMetro = tb("metro", "Metrónomo", () => { engine.metronome = engine.metronome > 0 ? 0 : 1; refresh(); });
 const readout = h("span", { class: "readout", "aria-live": "off" });
+// El tempo del cursor se toca para cambiarlo.
+const tempoBtn = h("button", { class: "tbtn tempo", title: "Cambiar el tempo", "aria-label": "Cambiar el tempo", onclick: () => sheets.tempo() });
 const r3 = h("div", { class: "row r3" }, btnCount, btnLoop,
   tb("down", "Más lento", () => setSpeed(-0.1)), speedVal, tb("up", "Más rápido", () => setSpeed(0.1)),
   btnMetro, readout);
 
-const playBtn = h("button", { class: "play", "aria-label": "Reproducir", onclick: () => { engine.playPause(); } }, icon("play", 26));
+const playBtn = h("button", { class: "play", "aria-label": "Reproducir", onclick: () => {
+  if (!engine.soundReady) { toast(soundPct < 100 ? `Los sonidos todavía cargan (${soundPct} %). Suena en cuanto terminen.` : "Preparando los sonidos de esta canción…"); pendingPlay = true; return; }
+  engine.playPause();
+} }, icon("play", 26));
+let soundPct = 0, pendingPlay = false;
 const chipName = h("span", { class: "nm" });
 const chipMeta = h("span", { class: "meta" });
 const chip = h("button", { class: "chip", "aria-label": "Pista actual, abrir pistas", onclick: () => sheets.tracks() }, chipName, chipMeta);
@@ -144,7 +182,7 @@ const transport = h("div", { class: "transport" },
   h("button", { class: "skip", "aria-label": "Compás anterior", onclick: () => jumpBar(-1) }, icon("prev", 28)),
   playBtn,
   h("button", { class: "skip", "aria-label": "Compás siguiente", onclick: () => jumpBar(1) }, icon("next", 28)),
-  chip);
+  chip, tempoBtn);
 tools.append(ctxStrip, pad.el, r1, r2, r3, transport);
 if (PREFS.compact) document.body.classList.add("compact");
 if (inputMode === "pad") showPad(true);
@@ -174,7 +212,7 @@ function jumpBar(d: number) {
 }
 
 // ---------- paletas ----------
-const palettes = buildPalettes(ed, { toast, close: () => togglePalette(null) });
+const palettes = buildPalettes(ed, { toast, close: () => togglePalette(null), openTempo: () => { togglePalette(null); sheets.tempo(); } });
 let openPal: string | null = null;
 function togglePalette(id: string | null) {
   openPal = openPal === id ? null : id;
@@ -237,8 +275,32 @@ function beatBox(t: number, b: number, v: number, i: number, row: number) {
   }
   return { x, y: bar.y - 8, w, h: bar.h + 16, col: true };
 }
+// Resaltado de la selección: un rectángulo por compás, del primer al último tiempo elegido.
+const selLayer = h("div", { class: "sel-layer", "aria-hidden": "true" });
+scoreWrap.append(selLayer);
+function drawSelection(off: ReturnType<typeof surfaceOffset>) {
+  const sel = ed.sel, bl = engine.bounds;
+  const boxes: HTMLElement[] = [];
+  const shown = sel ? (sel.all ? ed.renderTracks() : ed.renderTracks().filter((t) => t === sel.t)) : [];
+  for (const st of shown) if (sel && off && bl) {
+    const voiceBeats = (b: number) => ed.score.tracks[st]?.staves[0]?.bars[b]?.voices[sel.all ? 0 : sel.v]?.beats ?? [];
+    const s = sel.a.b < sel.z.b || (sel.a.b === sel.z.b && sel.a.i <= sel.z.i) ? sel.a : sel.z;
+    const e = s === sel.a ? sel.z : sel.a;
+    for (let b = s.b; b <= e.b; b++) {
+      const beats = voiceBeats(b);
+      const first = beats[b === s.b ? s.i : 0], last = beats[b === e.b ? Math.min(e.i, beats.length - 1) : beats.length - 1];
+      const f = first && bl.findBeats(first), l = last && bl.findBeats(last);
+      if (!f?.length || !l?.length) continue;
+      const top = Math.min(...f.map((x) => x.barBounds.realBounds.y)), bottom = Math.max(...f.map((x) => x.barBounds.realBounds.y + x.barBounds.realBounds.h));
+      const x1 = Math.min(...f.map((x) => x.visualBounds.x)) - 4, x2 = Math.max(...l.map((x) => x.visualBounds.x + x.visualBounds.w)) + 4;
+      boxes.push(h("div", { class: "sel-box", style: `left:${off.x + x1}px;top:${off.y + top - 6}px;width:${Math.max(12, x2 - x1)}px;height:${bottom - top + 12}px` }));
+    }
+  }
+  selLayer.replaceChildren(...boxes);
+}
 function drawCursor() {
   const off = surfaceOffset();
+  drawSelection(off);
   const c = ed.cursor;
   const box = off && ed.renderTracks().includes(c.t) ? beatBox(c.t, c.b, c.v, c.i, c.row) : null;
   if (!box || !off) { cursorEl.hidden = true; } else {
@@ -264,17 +326,15 @@ function scrollToCursor() {
 }
 
 // Tocar la partitura: elige tiempo y cuerda, y abre el teclado.
-let down: { x: number; y: number; t: number } | null = null;
-scoreWrap.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });
-scoreWrap.addEventListener("pointerup", (e) => {
-  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12 || Date.now() - down.t > 600) { down = null; return; }
-  down = null;
+// Mantener el dedo medio segundo empieza una selección; Mayús + clic la extiende.
+let down: { x: number; y: number; t: number; timer: number; done: boolean } | null = null;
+function placeAt(clientX: number, clientY: number, mode: "tap" | "extend" | "start") {
   const off = surfaceOffset(), bl = engine.bounds;
   if (!off || !bl) return;
   const wr = scoreWrap.getBoundingClientRect();
-  const x = e.clientX - wr.left + scoreWrap.scrollLeft - off.x, y = e.clientY - wr.top + scoreWrap.scrollTop - off.y;
+  const x = clientX - wr.left + scoreWrap.scrollLeft - off.x, y = clientY - wr.top + scoreWrap.scrollTop - off.y;
   const beat = bl.getBeatAtPos(x, y);
-  if (!beat) { openInput(); return; }
+  if (!beat) { if (mode === "tap") openInput(); return; }
   const t = beat.voice.bar.staff.track.index;
   const tr = ed.score.tracks[t];
   let row = ed.cursor.row;
@@ -286,10 +346,34 @@ scoreWrap.addEventListener("pointerup", (e) => {
       if (y >= bar.y - sp && y <= bar.y + bar.h + sp) row = Math.max(0, Math.min(n - 1, Math.round((y - bar.y) / sp)));
     }
   }
-  if (t !== ed.cursor.t) ed.cursor.t = t;
-  ed.setCursor({ t, b: beat.voice.bar.index, v: beat.voice.index, i: beat.index, row });
+  const to = { t, b: beat.voice.bar.index, v: beat.voice.index, i: beat.index, row };
+  if (mode === "start") {
+    ed.clearSelection();
+    ed.setCursor(to, false, false);
+    ed.toggleSelecting(true);
+    navigator.vibrate?.(15);
+    toast("Selección: toca otro tiempo para extenderla.");
+  } else ed.setCursor(to, false, mode === "extend" || ed.selecting);
   if (!engine.playing) engine.seekBeat(beat);
   openInput();
+}
+scoreWrap.addEventListener("pointerdown", (e) => {
+  if (down) clearTimeout(down.timer);
+  const d = { x: e.clientX, y: e.clientY, t: Date.now(), timer: 0, done: false };
+  if (e.pointerType !== "mouse") d.timer = window.setTimeout(() => { if (down === d) { d.done = true; placeAt(d.x, d.y, "start"); } }, 500);
+  down = d;
+});
+scoreWrap.addEventListener("pointermove", (e) => {
+  if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) { clearTimeout(down.timer); down = null; }
+});
+scoreWrap.addEventListener("pointercancel", () => { if (down) { clearTimeout(down.timer); down = null; } });
+scoreWrap.addEventListener("pointerup", (e) => {
+  const d = down;
+  down = null;
+  if (!d) return;
+  clearTimeout(d.timer);
+  if (d.done || Date.now() - d.t > 1500 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 12) return;
+  placeAt(e.clientX, e.clientY, e.shiftKey ? "extend" : "tap");
 });
 /** Tras tocar la partitura: muestra el teclado propio o abre el del teléfono, según el modo. */
 function openInput() {
@@ -305,7 +389,7 @@ function refresh() {
   const kindIcon = kindOf(tr) === "drums" ? "drum" : kindOf(tr) === "notation" ? "piano" : "guitar";
   chipName.replaceChildren(icon(kindIcon, 18), `${idx}. ${tr.name}`);
   const mb = ed.masterBar;
-  const tempo = Math.round(mb?.tempoAutomation?.value ?? sc.tempo);
+  const tempo = Math.round(ed.tempoHere);
   chipMeta.replaceChildren(
     h("span", null, `${ed.cursor.b + 1}/${sc.masterBars.length}`),
     h("span", { class: engine.soundReady ? "ok" : "" }, `● ${mb.timeSignatureNumerator}:${mb.timeSignatureDenominator}`),
@@ -316,8 +400,8 @@ function refresh() {
     h("b", null, DUR_GLYPH[beat?.duration ?? 4] ?? "♩"), beat?.dots ? "·" : "",
     h("span", null, DYN[ed.dynamic]),
     h("span", null, n ? (kindOf(tr) === "drums" ? "golpe" : midiName(n.realValue)) : "—"),
-    h("span", null, `♩=${tempo}`),
   );
+  tempoBtn.textContent = `♩ = ${tempo}`;
   zoomVal.textContent = `${Math.round(engine.api.settings.display.scale * 100)}%`;
   speedVal.textContent = `${Math.round(engine.speed * 100)}%`;
   btnUndo.disabled = !ed.canUndo;
@@ -329,11 +413,16 @@ function refresh() {
   for (const b of Array.from(voiceSeg.children)) b.setAttribute("aria-pressed", String(Number((b as HTMLElement).dataset.v) === ed.cursor.v));
   btnTracks.classList.toggle("live", !!live && live.others.length > 0);
   renderCtx();
+  // La barra de selección vive en el teclado propio: se muestra sola mientras haya selección.
+  if ((ed.sel || ed.selecting) && !document.body.classList.contains("pad-on")) { showPad(true); padAuto = true; }
+  else if (!ed.sel && !ed.selecting && padAuto) { padAuto = false; if (inputMode === "kbd") showPad(false); }
   pad.update();
   drawCursor();
   if (openPal) { const id = openPal; openPal = null; togglePalette(id); }
 }
 let timeText = "00:00 / 00:00";
+let padAuto = false;
+scoreWrap.addEventListener("contextmenu", (e) => e.preventDefault());
 const fmt = (ms: number) => { const s = Math.max(0, Math.round(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
 let lastPosPaint = 0;
 engine.on("position", (cur, end) => {
@@ -341,10 +430,15 @@ engine.on("position", (cur, end) => {
   const now = performance.now();
   if (now - lastPosPaint > 250) { lastPosPaint = now; const spans = chipMeta.querySelectorAll("span"); if (spans[2]) spans[2].textContent = timeText; }
 });
+engine.on("state", (playing) => { document.body.classList.toggle("playing", playing); });
 engine.on("state", (playing) => { playBtn.replaceChildren(icon(playing ? "pause" : "play", 26)); playBtn.setAttribute("aria-label", playing ? "Pausar" : "Reproducir"); });
-engine.on("rendered", () => { loadingEl.remove(); drawCursor(); });
-engine.on("ready", () => refresh());
-engine.on("loadProgress", (p) => { if (p < 100) syncEl.textContent = `Sonidos ${p}%`; else setSync(); });
+engine.on("rendered", () => {
+  loadingEl.remove(); drawCursor();
+  // Al cambiar de pista el cursor de reproducción se quedaba donde estaba en el dibujo anterior.
+  if (!engine.playing && ed.beat) engine.seekBeat(ed.beat);
+});
+engine.on("ready", () => { refresh(); setSync(); if (pendingPlay) { pendingPlay = false; engine.playPause(); } });
+engine.on("loadProgress", (p) => { soundPct = p; if (p < 100) syncEl.textContent = `Sonidos ${p} %`; else syncEl.textContent = "Preparando sonidos…"; });
 engine.on("beat", (b) => {
   if (!engine.playing) return;
   const bar = b.voice.bar;
@@ -362,7 +456,7 @@ window.addEventListener("resize", () => drawCursor());
 // ---------- guardar y dúo en vivo ----------
 let saveLocalT = 0, saveCloudT = 0;
 function setSync(msg?: string, err = false) {
-  syncEl.textContent = msg ?? (ARTIFACT ? "Prueba en Claude · guarda en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : "En la nube") : "Solo en este teléfono");
+  syncEl.textContent = msg ?? (isClaudeId(songId) ? "En tu biblioteca de Claude" : ARTIFACT ? "Solo en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : cloud.session ? `Biblioteca de ${cloud.session.username}` : "En la nube") : "Solo en este teléfono");
   syncEl.classList.toggle("err", err);
 }
 ed.onDirty = () => {
@@ -374,7 +468,18 @@ ed.onDirty = () => {
     rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
   }, 500);
   if (isCloud) scheduleCloudSave();
+  if (isClaudeId(songId)) scheduleClaudeSave();
 };
+let saveClaudeT = 0;
+function scheduleClaudeSave(delay = 2000) {
+  clearTimeout(saveClaudeT);
+  saveClaudeT = window.setTimeout(async () => {
+    if (!claudeLib || !isClaudeId(songId)) return;
+    setSync("Guardando…");
+    try { await claudeLib.save(songId!.slice(7), ed.score.title, toJson(ed.score)); setSync(); }
+    catch (e) { setSync((e as Error).message, true); }
+  }, delay);
+}
 function scheduleCloudSave(delay = 1500) {
   clearTimeout(saveCloudT);
   saveCloudT = window.setTimeout(async () => {
@@ -429,6 +534,10 @@ export async function openSong(id: string) {
   songId = id;
   isCloud = !ARTIFACT && !id.startsWith("local-");
   let json: string | null = null;
+  if (isClaudeId(id) && claudeLib) {
+    try { json = await claudeLib.load(id.slice(7)); if (!json) toast("No encontré esa canción en tu biblioteca.", true); }
+    catch (e) { toast((e as Error).message, true); }
+  }
   if (isCloud) {
     try {
       const row = await cloud.get(id);
@@ -448,18 +557,25 @@ export async function openSong(id: string) {
   setSync();
   refresh();
 }
-export async function newSong(styleId: string, title: string, bars: number, toCloud: boolean) {
-  const score = createSong(styleId, bars, title);
+/** Guarda una canción nueva donde corresponde (biblioteca de la cuenta, nube o teléfono) y la abre. */
+export async function addSong(score: at.model.Score, toCloud = true) {
+  finishScore(score);
+  const title = score.title || "Sin título";
   const json = toJson(score);
   let id = `local-${crypto.randomUUID()}`;
-  if (toCloud && !ARTIFACT) {
-    try { id = await cloud.create(title, json); }
-    catch (e) { toast((e as Error).message, true); }
-  }
+  try {
+    if (claudeLib && (await claudeLib.ready)) id = `claude-${await claudeLib.create(title, json)}`;
+    else if (!ARTIFACT && cloud.session) id = await cloud.createMine(title, json);
+    else if (!ARTIFACT && toCloud) id = await cloud.create(title, json);
+  } catch (e) { toast(`${(e as Error).message} Quedó guardada en este dispositivo.`, true); }
   saveLocalDoc(id, json);
   ed.replaceScore(score);
   ed.setCursor({ t: 0, b: 0, v: 0, i: 0, row: 0 });
   await openSong(id);
+  return id;
+}
+export async function newSong(styleId: string, title: string, bars: number, toCloud: boolean) {
+  await addSong(createSong(styleId, bars, title), toCloud);
 }
 export async function shareSong(): Promise<string | null> {
   if (!songId) return null;
@@ -474,28 +590,33 @@ export async function shareSong(): Promise<string | null> {
   const base = Capacitor.isNativePlatform() ? PUBLIC_URL : `${location.origin}${location.pathname}`;
   return `${base}#/s/${songId}`;
 }
-export function importScore(score: at.model.Score) {
-  finishScore(score);
-  ed.replaceScore(score);
-  ed.setCursor({ t: 0, b: 0, v: 0, i: 0, row: 0 });
-  ed.onDirty?.();
-  if (isCloud) scheduleCloudSave(300);
+/** Importar crea una canción nueva en la biblioteca (ya no reemplaza la abierta). */
+export async function importScore(score: at.model.Score, name = "") {
+  if (!score.title) score.title = name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "Importada";
+  await addSong(score);
 }
-export const ctx = { ed, engine, keys, cloud, toast, banks: BANKS, get bank() { return bank; }, setBank, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
+export const ctx = { ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
 const sheets = new Sheets(ctx);
+// Acceso para pruebas automáticas (sin efecto en la app).
+(window as unknown as { __mf?: unknown }).__mf = ctx;
 
 // ---------- arranque ----------
 async function boot() {
   const m = location.hash.match(/#\/s\/([\w-]+)/);
-  if (m) { await openSong(m[1]); return; }
+  if (m) { await openSong(m[1]); return; } // enlace del dúo: abre directo, con o sin cuenta
   const last = PREFS.last && localList().find((e) => e.id === PREFS.last);
-  if (last) { await openSong(last.id); return; }
-  // Primera vez: canción en blanco guardada en el teléfono, lista para escribir.
-  const id = `local-${crypto.randomUUID()}`;
-  ed.score.title = "Mi primera canción";
-  saveLocalDoc(id, toJson(ed.score));
-  await openSong(id);
-  toast(inputMode === "pad" ? "Toca la tablatura y escribe trastes con el teclado de abajo. → avanza." : "Toca la tablatura y escribe trastes con tu teclado. Espacio avanza.");
+  if (last) await openSong(last.id);
+  else {
+    // Primera vez: hoja en blanco en el dispositivo, lista para escribir.
+    const id = `local-${crypto.randomUUID()}`;
+    ed.score.title = "Mi primera canción";
+    saveLocalDoc(id, toJson(ed.score));
+    await openSong(id);
+  }
+  // Web y APK: pide entrar (se puede seguir sin cuenta). Artefacto: la cuenta de Claude basta.
+  if (!ARTIFACT && !cloud.session && !PREFS.offline) sheets.login(true);
+  else if (!last) sheets.library();
+  else toast(inputMode === "pad" ? "Toca la tablatura y escribe con el teclado de abajo. → avanza." : "Toca la tablatura y escribe trastes con tu teclado. Espacio avanza.");
 }
 window.addEventListener("hashchange", () => {
   const m = location.hash.match(/#\/s\/([\w-]+)/);
@@ -504,3 +625,4 @@ window.addEventListener("hashchange", () => {
 ed.rerender();
 refresh();
 boot();
+if (PREFS.fx) void setFx(true);

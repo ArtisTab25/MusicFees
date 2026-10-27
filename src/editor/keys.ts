@@ -15,6 +15,11 @@ export const KEY_HELP: KeyHelp[] = [
   { group: "Escribir", keys: "Enter", what: "Siguiente compás (lo crea al final)" },
   { group: "Escribir", keys: "Z", what: "Silencio: vacía el tiempo" },
   { group: "Escribir", keys: "K / J", what: "Cuerda más aguda / más grave (también puedes tocarla)" },
+  { group: "Seleccionar", keys: "Mayús + ← →", what: "Seleccionar tiempos (también Mayús + clic, o toque largo en el celular)" },
+  { group: "Seleccionar", keys: "Ctrl + C / X / V", what: "Copiar, cortar (deja silencios) y pegar, también en otra pista o canción" },
+  { group: "Seleccionar", keys: "Ctrl + A", what: "Seleccionar toda la pista" },
+  { group: "Seleccionar", keys: "Supr / ⌫", what: "Vaciar la selección" },
+  { group: "Seleccionar", keys: "Esc", what: "Quitar la selección" },
   { group: "Duración", keys: "R B N C S F", what: "Redonda, blanca, negra, corchea, semicorchea, fusa" },
   { group: "Duración", keys: ".", what: "Puntillo" },
   { group: "Duración", keys: ",", what: "Tresillo" },
@@ -86,10 +91,17 @@ export class KeyInput {
     if (e.isComposing || e.key === "Unidentified" || e.key === "Process" || e.keyCode === 229) return;
     const k = e.key;
     let handled = true;
-    if (k === "Backspace" || k === "Delete") this.ed.backspace();
+    const mod = e.ctrlKey || e.metaKey, lk = k.toLowerCase();
+    if (mod && lk === "c") this.toast(this.ed.copySel());
+    else if (mod && lk === "x") this.toast(this.ed.cutSel());
+    else if (mod && lk === "v") this.toast(this.ed.paste());
+    else if (mod && lk === "a") this.ed.selectBars(true);
+    else if (k === "Escape") this.ed.clearSelection();
+    else if ((k === "Backspace" || k === "Delete") && this.ed.sel && this.ed.selectedCount > 1) this.ed.deleteSel();
+    else if (k === "Backspace" || k === "Delete") this.ed.backspace();
     else if (k === "Enter") this.ed.gotoNextBar();
-    else if (k === "ArrowLeft") this.ed.prevBeat();
-    else if (k === "ArrowRight") this.ed.nextBeatPlain();
+    else if (k === "ArrowLeft") this.ed.prevBeat(e.shiftKey || this.ed.selecting);
+    else if (k === "ArrowRight") this.ed.nextBeatPlain(e.shiftKey || this.ed.selecting);
     else if (k === "ArrowUp") this.ed.stringUp();
     else if (k === "ArrowDown") this.ed.stringDown();
     else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "z") e.shiftKey ? this.ed.redo() : this.ed.undo();

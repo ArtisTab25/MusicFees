@@ -1,10 +1,11 @@
 // Estado de edición: cursor, cuerda, duración actual, historial y aplicación de operaciones.
 import * as at from "@coderline/alphatab";
 import {
-  applyOp, barCapacity, beatAt, beatTicks, dynIndex, finishScore, fromJson, kindOf, noteFxState,
+  applyOp, barCapacity, beatAt, beatTicks, bendShapeOf, tempoAt, tempoChanges, dynIndex, finishScore, fromJson, kindOf, noteFxState, type BendShape,
   rowToString, stringToRow, toJson, voiceUsed, type BeatRef, type Kind, type NoteFx, type Op,
 } from "../score/model";
 import type { Engine } from "../player/engine";
+import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, saveClip, type Clip, type Selection } from "../score/clip";
 
 type Score = at.model.Score;
 type Beat = at.model.Beat;
@@ -26,6 +27,10 @@ export class Editor {
   outbox: ((ops: Op[]) => void) | null = null;
   onDirty: (() => void) | null = null;
   private digitBuf = { key: "", first: -1, at: 0 };
+  /** Selección activa (una pista y una voz; puede cruzar compases). */
+  sel: Selection | null = null;
+  /** Modo selección: mover el cursor extiende la selección (celular: botón o toque largo). */
+  selecting = false;
 
   constructor(score: Score, public engine: Engine) {
     this.score = score;
@@ -125,10 +130,18 @@ export class Editor {
   }
 
   // ---------- movimiento ----------
-  setCursor(ref: Partial<Cursor>, silent = false) {
+  setCursor(ref: Partial<Cursor>, silent = false, extend = this.selecting && !silent) {
+    const prevT = this.cursor.t, prevV = this.cursor.v;
     Object.assign(this.cursor, ref);
     this.clampCursor();
     this.digitBuf.key = "";
+    const c = this.cursor;
+    if (this.sel && !this.sel.all && (c.t !== this.sel.t || c.v !== this.sel.v)) { this.sel = null; this.selecting = false; }
+    else if (this.sel?.all && extend) { this.sel.z = { b: c.b, i: 0 }; this.wholeBars(); if (!silent) this.emit(); return; }
+    else if (extend) {
+      if (!this.sel) this.sel = { t: prevT, v: prevV, a: { b: c.b, i: c.i }, z: { b: c.b, i: c.i } };
+      this.sel.z = { b: c.b, i: c.i };
+    } else if (!silent && this.sel && !this.selecting) this.sel = null;
     if (!silent) this.emit();
   }
   selectTrack(t: number) {
@@ -138,17 +151,19 @@ export class Editor {
     this.rerender();
     this.emit();
   }
-  prevBeat() {
+  prevBeat(extend = this.selecting) {
     const c = this.cursor;
-    if (c.i > 0) c.i--;
-    else if (c.b > 0) { c.b--; c.i = this.bar.voices[c.v].beats.length - 1; }
-    this.setCursor({});
+    let { b, i } = c;
+    if (i > 0) i--;
+    else if (b > 0) { b--; i = this.track.staves[0].bars[b].voices[c.v].beats.length - 1; }
+    this.setCursor({ b, i }, false, extend);
   }
-  nextBeatPlain() {
+  nextBeatPlain(extend = this.selecting) {
     const c = this.cursor, voice = this.bar.voices[c.v];
-    if (c.i < voice.beats.length - 1) c.i++;
-    else if (c.b < this.track.staves[0].bars.length - 1) { c.b++; c.i = 0; }
-    this.setCursor({});
+    let { b, i } = c;
+    if (i < voice.beats.length - 1) i++;
+    else if (b < this.track.staves[0].bars.length - 1) { b++; i = 0; }
+    this.setCursor({ b, i }, false, extend);
   }
   stringUp() { if (this.kind === "tab") this.setCursor({ row: Math.max(0, this.cursor.row - 1) }); }
   stringDown() { if (this.kind === "tab") this.setCursor({ row: Math.min(this.stringCount - 1, this.cursor.row + 1) }); }
@@ -295,6 +310,165 @@ export class Editor {
   deleteBar() { this.commit([{ k: "barDel", at: this.cursor.b }]); }
   barProp(prop: Extract<Op, { k: "barProp" }>["prop"], val: number | string | boolean | null) {
     this.commit([{ k: "barProp", b: this.cursor.b, prop, val }]);
+  }
+
+  // ---------- selección y portapapeles ----------
+  /** Empieza a seleccionar desde el cursor (o termina si ya estaba seleccionando). */
+  toggleSelecting(on = !this.selecting) {
+    this.selecting = on;
+    const c = this.cursor;
+    if (on && !this.sel) this.sel = { t: c.t, v: c.v, a: { b: c.b, i: c.i }, z: { b: c.b, i: c.i } };
+    if (!on) this.sel = null;
+    this.emit();
+  }
+  clearSelection() { if (this.sel || this.selecting) { this.sel = null; this.selecting = false; this.emit(); } }
+  /** Extiende la selección a compases completos (o a toda la pista). */
+  selectBars(all = false) {
+    const c = this.cursor, bars = this.track.staves[0].bars;
+    const s = all ? 0 : Math.min(this.sel?.a.b ?? c.b, this.sel?.z.b ?? c.b);
+    const e = all ? bars.length - 1 : Math.max(this.sel?.a.b ?? c.b, this.sel?.z.b ?? c.b);
+    this.sel = { t: c.t, v: c.v, a: { b: s, i: 0 }, z: { b: e, i: bars[e].voices[c.v].beats.length - 1 }, all: this.sel?.all };
+    this.selecting = true;
+    this.emit();
+  }
+  /** Activa o quita «todas las pistas»: la selección pasa a ser de compases completos de la canción. */
+  toggleAllTracks() {
+    const c = this.cursor;
+    if (!this.sel) this.sel = { t: c.t, v: c.v, a: { b: c.b, i: 0 }, z: { b: c.b, i: 0 } };
+    this.sel.all = !this.sel.all;
+    this.selecting = true;
+    if (this.sel.all) this.wholeBars();
+    this.emit();
+  }
+  private wholeBars() {
+    const sel = this.sel!, { s, e } = ordered(sel), bars = this.score.tracks[sel.t].staves[0].bars;
+    const fwd = sel.a.b <= sel.z.b;
+    const first = { b: s.b, i: 0 }, last = { b: e.b, i: bars[e.b].voices[sel.v].beats.length - 1 };
+    sel.a = fwd ? first : last; sel.z = fwd ? last : first;
+  }
+  get selBars() { if (!this.sel) return 0; const { s, e } = ordered(this.sel); return e.b - s.b + 1; }
+  /** Lo que hay que copiar: la selección o, sin ella, el tiempo del cursor. */
+  private target(): Selection {
+    const c = this.cursor;
+    return this.sel ?? { t: c.t, v: c.v, a: { b: c.b, i: c.i }, z: { b: c.b, i: c.i } };
+  }
+  get selectedCount() { return this.sel ? (this.sel.all ? this.selBars : countSelected(this.score, this.sel)) : 0; }
+  get clip(): Clip | null { return loadClip(); }
+  copySel(): string {
+    const clip = copy(this.score, this.target());
+    saveClip(clip);
+    const n = clip.bars.reduce((k, b) => k + b.length, 0);
+    if (clip.tracks) return `Copiado: ${clip.bars.length} compás${clip.bars.length > 1 ? "es" : ""} de todas las pistas.`;
+    return clip.whole ? `Copiado: ${clip.bars.length} compás${clip.bars.length > 1 ? "es" : ""} de ${clip.from}.` : `Copiado: ${n} tiempo${n > 1 ? "s" : ""} de ${clip.from}.`;
+  }
+  cutSel(): string {
+    const msg = this.copySel().replace("Copiado", "Cortado");
+    this.commit(planClear(this.score, this.target()));
+    return msg;
+  }
+  /** Pega en el inicio de la selección o en el cursor. `insert` abre compases nuevos en vez de sobrescribir. */
+  paste(insert = false): string {
+    const clip = loadClip();
+    if (!clip) return "Primero copia algo.";
+    const t = this.target();
+    const start = t.a.b < t.z.b || (t.a.b === t.z.b && t.a.i <= t.z.i) ? t.a : t.z;
+    const kind = this.kind;
+    let warn = "";
+    if (!clip.tracks && (clip.kind === "drums") !== (kind === "drums")) warn = " Solo se pegó el ritmo: la batería y los instrumentos con altura no se pueden convertir entre sí.";
+    if (insert && !clip.whole) return "Para insertar, copia compases completos (botón «Compases»).";
+    this.commit(planPaste(this.score, t.t, t.v, insert ? { b: start.b, i: 0 } : start, clip, insert));
+    this.clearSelection();
+    this.setCursor({ b: start.b, i: insert ? 0 : start.i });
+    return `${insert ? "Insertado" : "Pegado"} en el compás ${start.b + 1}.${warn}`;
+  }
+  /** Copia los compases seleccionados y los inserta justo después. */
+  duplicate(): string {
+    if (!this.sel) return "Selecciona primero los compases.";
+    this.selectBars();
+    const clip = copy(this.score, this.sel);
+    const { e } = ordered(this.sel);
+    this.commit(planPaste(this.score, this.sel.t, this.sel.v, { b: e.b + 1, i: 0 }, clip, true));
+    const n = clip.bars.length;
+    this.clearSelection();
+    this.setCursor({ b: e.b + 1, i: 0 });
+    return `Duplicado: ${n} compás${n > 1 ? "es" : ""}.`;
+  }
+  /** Borra de la canción los compases seleccionados (en todas las pistas). */
+  deleteBars(): string {
+    const t = this.target();
+    const n = ordered(t).e.b - ordered(t).s.b + 1;
+    this.commit(planDeleteBars(this.score, t));
+    this.clearSelection();
+    this.setCursor({ b: Math.min(ordered(t).s.b, this.track.staves[0].bars.length - 1), i: 0 });
+    return `Se borraron ${n} compás${n > 1 ? "es" : ""}.`;
+  }
+  deleteSel() { this.commit(planClear(this.score, this.target())); }
+  /** Transpone la selección; sin selección, toda la pista. */
+  transpose(semis: number): string {
+    if (this.kind === "drums") return "La batería no se transpone.";
+    const bars = this.track.staves[0].bars, c = this.cursor;
+    const sel = this.sel ?? { t: c.t, v: c.v, a: { b: 0, i: 0 }, z: { b: bars.length - 1, i: bars[bars.length - 1].voices[c.v].beats.length - 1 } };
+    const { ops, lost } = planTranspose(this.score, sel, semis);
+    this.commit(ops);
+    const what = this.sel ? "la selección" : "toda la pista";
+    return `${semis > 0 ? "+" : ""}${semis} semitono${Math.abs(semis) > 1 ? "s" : ""} en ${what}.${lost ? ` ${lost} nota${lost > 1 ? "s" : ""} quedaba${lost > 1 ? "n" : ""} fuera del rango del instrumento y se quitó.` : ""}`;
+  }
+
+  // ---------- tempo ----------
+  /** Posición del cursor dentro de su compás (0 = inicio, 1 = final), por duración. */
+  get beatRatio() {
+    const c = this.cursor, voice = this.bar.voices[c.v];
+    let t = 0;
+    for (let i = 0; i < c.i && i < voice.beats.length; i++) t += beatTicks(voice.beats[i]);
+    return Math.min(0.999, t / barCapacity(this.masterBar));
+  }
+  get tempoHere() { return tempoAt(this.score, this.cursor.b, this.beatRatio); }
+  get tempoList() { return tempoChanges(this.score); }
+  private barTempos(b: number) {
+    return this.score.masterBars[b].tempoAutomations.filter((a) => a.type === at.model.AutomationType.Tempo).map((a) => ({ r: a.ratioPosition, bpm: a.value }));
+  }
+  /** Cambia el tempo. `from`: desde este tiempo en adelante. `bar`: solo este compás (después vuelve el anterior). */
+  setTempo(bpm: number, mode: "from" | "bar" = "from") {
+    const c = this.cursor, r = mode === "bar" ? 0 : this.beatRatio;
+    const ops: Op[] = [];
+    const after = tempoAt(this.score, c.b + 1, 0);
+    const keep = mode === "bar" ? [] : this.barTempos(c.b).filter((x) => Math.abs(x.r - r) > 1e-3);
+    ops.push({ k: "tempo", b: c.b, list: [...keep, { r, bpm }] });
+    const next = c.b + 1;
+    if (mode === "bar" && next < this.score.masterBars.length && !this.barTempos(next).some((x) => x.r === 0))
+      ops.push({ k: "tempo", b: next, list: [{ r: 0, bpm: after }, ...this.barTempos(next)] });
+    this.commit(ops);
+  }
+  /** Accelerando o ritardando: del tempo actual a `to` bpm, repartido tiempo por tiempo hasta el compás `endBar`. */
+  tempoRamp(to: number, endBar: number) {
+    const c = this.cursor, from = this.tempoHere, last = Math.max(c.b, Math.min(endBar, this.score.masterBars.length - 1));
+    const steps: { b: number; r: number }[] = [];
+    for (let b = c.b; b <= last; b++) {
+      const n = this.score.masterBars[b].timeSignatureNumerator;
+      for (let k = 0; k < n; k++) { const r = k / n; if (b > c.b || r >= this.beatRatio - 1e-6) steps.push({ b, r }); }
+    }
+    const ops: Op[] = [];
+    for (let b = c.b; b <= last; b++) {
+      const mine = steps.filter((x) => x.b === b);
+      const list = mine.map((x) => { const j = steps.indexOf(x); return { r: x.r, bpm: from + ((to - from) * (j + 1)) / steps.length }; });
+      const keep = b === c.b ? this.barTempos(b).filter((x) => x.r < this.beatRatio - 1e-6) : [];
+      ops.push({ k: "tempo", b, list: [...keep, ...list] });
+    }
+    this.commit(ops);
+  }
+  removeTempo(b: number, r: number) {
+    this.commit([{ k: "tempo", b, list: this.barTempos(b).filter((x) => Math.abs(x.r - r) > 1e-3) }]);
+  }
+
+  // ---------- bends ----------
+  get bendShape(): BendShape { return this.kind === "tab" ? bendShapeOf(this.noteAtCursor()) : "none"; }
+  bend(shape: BendShape): string | null {
+    const n = this.noteAtCursor();
+    if (this.kind !== "tab" || !n) return "Primero escribe una nota en esta cuerda.";
+    this.commit([{ k: "bend", ...this.ref(), str: n.string, shape: this.bendShape === shape ? "none" : shape }]);
+    const fresh = this.noteAtCursor();
+    if (fresh) this.engine.playNote(fresh);
+    return null;
   }
 
   stringOfRow = (row: number) => rowToString(this.track, row);

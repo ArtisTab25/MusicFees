@@ -9,4 +9,3 @@ dist-artifact
 .cache
 public/soundfont/MuseScore_General.sf3
 public/soundfont/MuseScore_General-LICENSE.md
-public/soundfont/banks.json

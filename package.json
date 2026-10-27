@@ -1,13 +1,14 @@
 {
   "name": "musicfees",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/soundfonts.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "build:artifact": "node scripts/build-artifact.mjs",
     "test": "esbuild tests/model.test.ts --bundle --platform=node --format=esm --outfile=tests/_model.test.mjs --external:@coderline/alphatab --log-level=warning && node --test tests/_model.test.mjs"
   },
   "dependencies": {
@@ -18,7 +19,10 @@
     "@capacitor/share": "^8.0.3",
     "@coderline/alphatab": "1.8.4",
     "@supabase/supabase-js": "2.118.0",
-    "jspdf": "4.2.1"
+    "@webaudiomodules/sdk": "0.0.12",
+    "jspdf": "4.2.1",
+    "spessasynth_lib": "4.3.14",
+    "tone": "15.1.22"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.3",

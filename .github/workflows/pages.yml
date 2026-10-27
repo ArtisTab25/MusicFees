@@ -3,6 +3,7 @@ name: Publicar en GitHub Pages
 on:
   push:
     branches: [main]
+  # Los commits que hace "Descomprimir zip" no disparan push: se publica al terminar ese workflow.
   workflow_run:
     workflows: ["Descomprimir zip"]
     types: [completed]

@@ -39,7 +39,18 @@ export function loadLocalDoc(id: string): string | null {
   try { return localStorage.getItem(LOCAL_DOC(id)); } catch { return null; }
 }
 
+export interface Session { token: string; username: string; isAdmin: boolean }
+export interface UserRow { id: string; username: string; is_admin: boolean; created_at: string; songs: number }
+const SESSION_KEY = "mf:session";
+export function loadSession(): Session | null {
+  try { const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); return s?.token ? s : null; } catch { return null; }
+}
+function saveSession(s: Session | null) {
+  try { if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s)); else localStorage.removeItem(SESSION_KEY); } catch { /* nada */ }
+}
+
 export class Cloud {
+  session: Session | null = loadSession();
   sb: SupabaseClient;
   ok = true;
   constructor() {
@@ -70,6 +81,41 @@ export class Cloud {
     if (error) throw this.explain(error);
     return Number(v);
   }
+  // ---------- cuentas (002_cuentas.sql) ----------
+  private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+    if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
+    const { data, error } = await this.sb.rpc(fn, args);
+    if (error) {
+      if (/function .*does not exist|schema cache|Could not find the function/i.test(error.message ?? "")) throw new Error("La base de datos todavía no tiene cuentas. Ejecuta supabase/migrations/002_cuentas.sql en Supabase.");
+      if (/sesión terminó/i.test(error.message ?? "")) { this.session = null; saveSession(null); }
+      throw this.explain(error);
+    }
+    return data as T;
+  }
+  private tok() { if (!this.session) throw new Error("Entra con tu cuenta primero."); return this.session.token; }
+  needSetup() { return this.rpc<boolean>("mf_need_setup", {}); }
+  private start(rows: { token: string; username: string; is_admin: boolean }[]) {
+    const r = rows[0];
+    this.session = { token: r.token, username: r.username, isAdmin: r.is_admin };
+    saveSession(this.session);
+    return this.session;
+  }
+  async setupAdmin(user: string, pass: string) { return this.start(await this.rpc("mf_setup_admin", { p_user: user, p_pass: pass })); }
+  async login(user: string, pass: string) { return this.start(await this.rpc("mf_login", { p_user: user, p_pass: pass })); }
+  async logout() {
+    const t = this.session?.token;
+    this.session = null; saveSession(null);
+    if (t) await this.sb.rpc("mf_logout", { p_token: t }).then(() => {}, () => {});
+  }
+  users() { return this.rpc<UserRow[]>("mf_admin_users", { p_token: this.tok() }); }
+  createUser(user: string, pass: string, admin = false) { return this.rpc<string>("mf_admin_create_user", { p_token: this.tok(), p_user: user, p_pass: pass, p_admin: admin }); }
+  setPassword(id: string, pass: string) { return this.rpc<void>("mf_admin_set_password", { p_token: this.tok(), p_id: id, p_pass: pass }); }
+  deleteUser(id: string) { return this.rpc<void>("mf_admin_delete_user", { p_token: this.tok(), p_id: id }); }
+  mySongs() { return this.rpc<{ id: string; title: string; updated_at: string; size: number }[]>("mf_my_songs", { p_token: this.tok() }); }
+  createMine(title: string, data: string) { return this.rpc<string>("mf_create_my_song", { p_token: this.tok(), p_title: title, p_data: data }); }
+  claim(id: string) { return this.rpc<void>("mf_claim_song", { p_token: this.tok(), p_id: id }); }
+  deleteMine(id: string) { return this.rpc<void>("mf_delete_my_song", { p_token: this.tok(), p_id: id }); }
+
   async list(ids: string[]) {
     if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
     if (!ids.length) return [];
