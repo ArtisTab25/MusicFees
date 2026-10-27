@@ -7,7 +7,7 @@ import { Sequencer, WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import type { MasterFx, PluginRef, TrackFx } from "../score/model";
 import { createPlugin, type WamInstance } from "./wam";
-import { MasterChain, TrackChain, makeReverb } from "./studio";
+import { MasterChain, TrackChain, lightAudio, makeBuses, setLightAudio, type Buses } from "./studio";
 import type { Beat } from "./engine";
 
 const CH = 16;
@@ -18,7 +18,7 @@ export class FxEngine {
   private synth!: WorkletSynthesizer;
   private seq!: Sequencer;
   private master!: MasterChain;
-  private reverbBus!: Tone.Gain;
+  private buses!: Buses;
   private chans: Tone.Gain[] = [];
   private chains = new Map<number, TrackChain>();
   // ---------- metrónomo y cuenta inicial ----------
@@ -42,7 +42,8 @@ export class FxEngine {
     this.native = new AudioContext({ latencyHint: "playback" });
     this.ctx = new Tone.Context(this.native);
   }
-  static async create(soundFont: Uint8Array, master: MasterFx | null): Promise<FxEngine> {
+  static async create(soundFont: Uint8Array, master: MasterFx | null, light = false): Promise<FxEngine> {
+    setLightAudio(light);
     const e = new FxEngine();
     const ctx = e.ctx;
     const o = { context: ctx };
@@ -50,8 +51,7 @@ export class FxEngine {
     e.master = new MasterChain(ctx, ctx.destination);
     e.master.output.connect(e.meter);
     e.master.set(master);
-    e.reverbBus = new Tone.Gain(o);
-    await makeReverb(ctx, e.master.input).then((r) => e.reverbBus.connect(r));
+    e.buses = await makeBuses(ctx, e.master.input);
     for (let i = 0; i < CH; i++) e.chans.push(new Tone.Gain(o));
     // Clic de metrónomo: va directo a la salida (no pasa por el masterizado ni se graba).
     e.clickOut = new Tone.Gain({ ...o, gain: 0.6 });
@@ -64,6 +64,10 @@ export class FxEngine {
     const buf = soundFont.buffer.slice(soundFont.byteOffset, soundFont.byteOffset + soundFont.byteLength) as ArrayBuffer;
     await e.synth.soundBankManager.addSoundBank(buf, "main");
     await e.synth.isReady;
+    // spessasynth trae su propia reverb, chorus y delay por nota (en JavaScript, en el hilo de audio).
+    // Su salida de efectos ni siquiera se conecta (los efectos son los de MusicFees): se apagan.
+    e.synth.setSystemParameter("effectsEnabled", false);
+    if (lightAudio()) { e.synth.setSystemParameter("voiceCap", 96); e.synth.setSystemParameter("interpolationType", 0); }
     e.synth.connectIndividualOutputs(e.chans.map((g) => g.input as unknown as AudioNode));
     e.seq = new Sequencer(e.synth, { skipToFirstNoteOn: false });
     e.ready = true;
@@ -106,7 +110,7 @@ export class FxEngine {
     const seen = new Set<number>();
     for (const t of tracks) {
       let chain = this.chains.get(t.index);
-      if (!chain) { chain = new TrackChain(this.ctx, this.reverbBus, this.master.input); this.chains.set(t.index, chain); }
+      if (!chain) { chain = new TrackChain(this.ctx, this.buses, this.master.input); this.chains.set(t.index, chain); }
       chain.set(t.fx);
       void this.syncPlugins(t.index, t.fx?.plugins ?? []);
       chain.level = t.mute || (soloOn && !t.solo) ? 0 : 1;

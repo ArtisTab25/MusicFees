@@ -6,7 +6,7 @@ import type { KeyInput } from "../editor/keys";
 import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
-import { kindOf, fxMap, masterOf, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { kindOf, fxMap, masterOf, drumKit, type MasterFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
@@ -148,10 +148,11 @@ export class Sheets {
     const tr = ed.track, st = tr.staves[0], kind = kindOf(tr), i = ed.cursor.t;
     const nm = h("input", { type: "text", value: tr.name, "aria-label": "Nombre de la pista" });
     nm.onchange = () => this.ops([{ k: "trackProp", t: i, prop: "name", val: nm.value }]);
-    const prog = h("select", { "aria-label": "Sonido" }, presetOptions(PRESETS.find((p) => p.program === tr.playbackInfo.program && p.kind === kind)?.id));
+    const curProg = kind === "drums" ? (drumKit(ed.score, i) ?? 0) : tr.playbackInfo.program;
+    const prog = h("select", { "aria-label": "Sonido" }, presetOptions(PRESETS.find((p) => p.program === curProg && p.kind === kind)?.id));
     prog.onchange = () => {
       const p = presetById(prog.value)!;
-      if (p.kind !== kind) { this.c.toast(`«${p.name}» se escribe distinto a esta pista. Agrega una pista nueva desde Tracks.`, true); prog.value = PRESETS.find((x) => x.program === tr.playbackInfo.program && x.kind === kind)?.id ?? ""; return; }
+      if (p.kind !== kind) { this.c.toast(`«${p.name}» se escribe distinto a esta pista. Agrega una pista nueva desde Tracks.`, true); prog.value = PRESETS.find((x) => x.program === curProg && x.kind === kind)?.id ?? ""; return; }
       this.ops([{ k: "trackProp", t: i, prop: "program", val: p.program }]);
     };
     body.append(h("div", { class: "sec" }, h("h3", null, "Información"), field("Nombre", nm), field("Sonido", prog)));

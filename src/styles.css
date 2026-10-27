@@ -275,3 +275,10 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .plugparam span { font-size: 14px; overflow-wrap: anywhere; }
 .plugparam input[type=range] { width: 100%; height: 32px; }
 .plugparam output { font-family: var(--f-mono); font-size: 13px; text-align: right; }
+
+/* Batería: piezas agrupadas, en varias filas que se desplazan hacia abajo */
+.ctxstrip.drumpad { flex-wrap: wrap; overflow-x: hidden; overflow-y: auto; max-height: 132px; align-content: flex-start; }
+.dgroup { display: contents; }
+.dgroup > span { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-d); writing-mode: vertical-rl; transform: rotate(180deg); align-self: center; margin-left: 4px; }
+.sbtn.dkey { font-family: var(--f-ui); font-weight: 600; font-size: 12px; height: 34px; padding: 0 9px; }
+.sbtn.dmore { font-family: var(--f-ui); font-size: 12px; align-self: flex-end; }

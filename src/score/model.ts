@@ -110,6 +110,41 @@ function writeFx(score: Score, map: Record<number, TrackFx>) {
   score.notices = rest.join("\n");
 }
 
+// ---------- datos extra por pista (kit de batería, color, bloqueo) ----------
+// alphaTab no guarda estas cosas (y fuerza el programa 0 en la batería), así que viven en `notices`.
+const TM_TAG = "MFTM1:";
+export interface TrackMeta { kit?: number; color?: string; locked?: boolean }
+export function metaMap(score: Score): Record<number, TrackMeta> {
+  const line = (score.notices || "").split("\n").find((l) => l.startsWith(TM_TAG));
+  if (!line) return {};
+  try { return JSON.parse(line.slice(TM_TAG.length)) as Record<number, TrackMeta>; } catch { return {}; }
+}
+function writeMeta(score: Score, map: Record<number, TrackMeta>) {
+  const rest = (score.notices || "").split("\n").filter((l) => l && !l.startsWith(TM_TAG));
+  for (const k of Object.keys(map)) if (!Object.keys(map[Number(k)]).length) delete map[Number(k)];
+  if (Object.keys(map).length) rest.push(TM_TAG + JSON.stringify(map));
+  score.notices = rest.join("\n");
+}
+export function setMeta(score: Score, t: number, patch: Partial<TrackMeta>) {
+  const map = metaMap(score);
+  const cur = { ...(map[t] ?? {}), ...patch };
+  for (const [k, v] of Object.entries(cur)) if (v === undefined || v === null || v === false) delete (cur as Record<string, unknown>)[k];
+  map[t] = cur;
+  writeMeta(score, map);
+}
+/** Kit de batería de una pista (programa GM del kit), si se eligió uno distinto del estándar. */
+export const drumKit = (score: Score, t: number) => (score.tracks[t]?.isPercussion ? metaMap(score)[t]?.kit : undefined);
+/** Reacomoda los datos por pista cuando cambian los índices (borrar, mover, duplicar). */
+function remapTrackData(score: Score, newIndexOf: (old: number) => number | null) {
+  const move = <T,>(map: Record<number, T>) => {
+    const next: Record<number, T> = {};
+    for (const [k, v] of Object.entries(map)) { const n = newIndexOf(Number(k)); if (n !== null) next[n] = v; }
+    return next;
+  };
+  writeFx(score, move(fxMap(score)));
+  writeMeta(score, move(metaMap(score)));
+}
+
 /** Nota independiente del instrumento: altura real (o pieza de batería por su número MIDI). */
 export interface ClipNote { pitch?: number; str?: number; fret?: number; drum?: number; fx: NoteFx[]; bend?: { type: number; pts: [number, number][] } }
 /** Tiempo independiente del instrumento, para el portapapeles y la operación setVoice. */
@@ -292,6 +327,7 @@ export function createSong(styleId = "blank_gtr", bars = 8, title = "Sin título
   const score = at.importer.ScoreLoader.loadAlphaTex(tex, settings);
   score.tracks.forEach((tr, i) => finishTrack(tr, ps[i]));
   assignChannels(score);
+  ps.forEach((p, i) => { if (p.kind === "drums" && p.program) setMeta(score, i, { kit: p.program }); });
   finishScore(score);
   return score;
 }
@@ -325,6 +361,7 @@ function addTrack(score: Score, presetId: string, name?: string, tuning?: number
   tr.score = score;
   score.addTrack(tr);
   assignChannels(score);
+  if (p.kind === "drums" && p.program) setMeta(score, tr.index, { kit: p.program });
 }
 
 // ---------- compases ----------
@@ -648,11 +685,7 @@ export function applyOp(score: Score, op: Op): Score {
     }
     case "trackDel": {
       if (score.tracks.length <= 1) break;
-      { // los efectos siguen a su pista
-        const map = fxMap(score), next: Record<number, TrackFx> = {};
-        for (const [k, v] of Object.entries(map)) { const i = Number(k); if (i < op.t) next[i] = v; else if (i > op.t) next[i - 1] = v; }
-        writeFx(score, next);
-      }
+      remapTrackData(score, (i) => (i < op.t ? i : i > op.t ? i - 1 : null)); // efectos y datos siguen a su pista
       score.tracks.splice(op.t, 1);
       score.tracks.forEach((t, i) => (t.index = i));
       break;
@@ -661,13 +694,10 @@ export function applyOp(score: Score, op: Op): Score {
       const [tr] = score.tracks.splice(op.t, 1);
       if (!tr) break;
       {
-        const map = fxMap(score);
         const ids = Array.from({ length: score.tracks.length + 1 }, (_, i) => i);
         const [moved] = ids.splice(op.t, 1);
         ids.splice(Math.max(0, Math.min(op.to, ids.length)), 0, moved);
-        const next: Record<number, TrackFx> = {};
-        ids.forEach((oldIdx, newIdx) => { if (map[oldIdx]) next[newIdx] = map[oldIdx]; });
-        writeFx(score, next);
+        remapTrackData(score, (old) => ids.indexOf(old));
       }
       score.tracks.splice(Math.max(0, Math.min(op.to, score.tracks.length)), 0, tr);
       score.tracks.forEach((t, i) => (t.index = i));
@@ -680,7 +710,10 @@ export function applyOp(score: Score, op: Op): Score {
       const v = op.val;
       switch (op.prop) {
         case "name": tr.name = String(v).slice(0, 60); tr.shortName = tr.name.slice(0, 10); break;
-        case "program": tr.playbackInfo.program = Number(v); break;
+        case "program":
+          tr.playbackInfo.program = Number(v);
+          if (tr.isPercussion) setMeta(score, op.t, { kit: Number(v) || undefined });
+          break;
         case "tuning": if (Array.isArray(v) && v.length === st.tuning.length) st.stringTuning = new M.Tuning("", (v as number[]).slice(), false); break;
         case "capo": st.capo = Math.max(0, Math.min(12, Number(v))); break;
         case "volume": tr.playbackInfo.volume = Math.max(0, Math.min(16, Number(v))); break;

@@ -1,7 +1,22 @@
 // Envoltura de alphaTab: render de partitura/tablatura y reproducción con el banco de sonidos elegido.
 import * as at from "@coderline/alphatab";
 import type { FxEngine, FxTrack } from "./fxEngine";
-import { masterOf, type MasterFx } from "../score/model";
+import { drumKit, masterOf, type MasterFx } from "../score/model";
+
+// alphaTab fuerza el programa 0 en las pistas de batería (Track.finish), así que el kit elegido
+// (cuarto, power, jazz, escobillas, electrónica, 808…) nunca llegaba al MIDI y siempre sonaba el
+// estándar. Se corrige al generar el MIDI: el cambio de programa de una pista de batería usa su kit.
+// Aplica al reproductor de alphaTab, al motor de estudio y a las exportaciones.
+let kitScore: at.model.Score | null = null;
+export const setKitScore = (s: at.model.Score | null) => { kitScore = s; };
+{
+  const H = at.midi.AlphaSynthMidiFileHandler.prototype as unknown as { addProgramChange(track: number, tick: number, channel: number, program: number): void };
+  const orig = H.addProgramChange;
+  H.addProgramChange = function (track: number, tick: number, channel: number, program: number) {
+    const kit = kitScore ? drumKit(kitScore, track) : undefined;
+    return orig.call(this, track, tick, channel, kit ?? program);
+  };
+}
 
 /** Un tiempo del metrónomo: segundos desde el inicio, si es el primero del compás y cuántos tiene el compás. */
 export interface Beat { t: number; down: boolean; num: number }
@@ -114,6 +129,7 @@ export class Engine {
    *  al darle play (no en cada tecla: en el teléfono eso pesaba). */
   private midiDirty = false;
   render(score: Score, tracks: number[], fromBar?: number) {
+    setKitScore(score);
     const same = score === this.score;
     if (same) this.midiDirty = true;
     this.score = score;
@@ -141,10 +157,10 @@ export class Engine {
     return { midi: mf.toBinary(), beats: beatTimes(mf, gen.tickLookup.masterBars) };
   }
   /** Activa los efectos: `soundFont` es el banco original (sin adaptar). */
-  async enableFx(soundFont: Uint8Array, tracks: () => FxTrack[], master: MasterFx | null = null) {
+  async enableFx(soundFont: Uint8Array, tracks: () => FxTrack[], master: MasterFx | null = null, light = false) {
     if (this.fx) return;
     const { FxEngine } = await import("./fxEngine");
-    const fx = await FxEngine.create(soundFont, master);
+    const fx = await FxEngine.create(soundFont, master, light);
     this.fx = fx;
     fx.metronome = this.metro;
     fx.countIn = this.count > 0;

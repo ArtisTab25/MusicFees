@@ -69,6 +69,8 @@ const fxTracks = () => {
   const map = fxMap(ed.score);
   return ed.score.tracks.map((t) => ({ index: t.index, channels: [t.playbackInfo.primaryChannel, t.playbackInfo.secondaryChannel], fx: map[t.index] ?? null, mute: t.playbackInfo.isMute, solo: t.playbackInfo.isSolo }));
 };
+/** Calidad ligera del motor de estudio: automática en teléfonos (o la que elija el usuario). */
+const lightAudioPref = () => PREFS.audioQuality === "light" || (PREFS.audioQuality !== "high" && (Capacitor.isNativePlatform() || matchMedia("(pointer: coarse)").matches));
 /** Activa o apaga el motor con efectos. Usa el banco elegido, sin la adaptación para alphaTab. */
 async function setFx(on: boolean) {
   if (on === !!engine.fx) return;
@@ -76,7 +78,7 @@ async function setFx(on: boolean) {
   syncEl.textContent = "Preparando efectos…";
   try {
     const sf = bankOriginal ?? new Uint8Array(await (await fetch(BUILTIN_URL)).arrayBuffer());
-    await engine.enableFx(sf, fxTracks, masterOf(ed.score));
+    await engine.enableFx(sf, fxTracks, masterOf(ed.score), lightAudioPref());
     PREFS.fx = true; savePrefs();
     setSync(); refresh();
   } catch (e) { setSync(`No se pudieron activar los efectos: ${(e as Error).message}`, true); }
@@ -242,14 +244,47 @@ function renderCtx() {
       ctxStrip.append(h("button", { class: `pkey${black ? " black" : ""}${on ? " on" : ""}`, "aria-label": midiName(m), onclick: () => ed.togglePitch(m) }, black ? "" : midiName(m)));
     }
     ctxStrip.append(h("button", { class: "sbtn", "aria-label": "Octava arriba", onclick: () => { ed.octave = Math.min(8, ed.octave + 1); renderCtx(); } }, "+8"));
-  } else {
-    const names = new Map([...DRUM_PIECES, ...LATIN_PIECES].map((p) => [p.id, p]));
-    tr.percussionArticulations.forEach((a, idx) => {
-      const p = names.get(a.outputMidiNumber);
-      const on = !!beat?.notes.some((n) => n.percussionArticulation === idx);
-      ctxStrip.append(h("button", { class: "sbtn", "aria-pressed": on, title: p?.name ?? a.elementType, onclick: () => ed.togglePerc(idx) }, p?.short ?? a.elementType.slice(0, 4), h("small", null, p?.name.split(" ")[0] ?? "")));
-    });
+  } else drumPad(tr, beat);
+  ctxStrip.classList.toggle("drumpad", kind === "drums");
+}
+
+// ---------- batería ----------
+// Las pistas importadas de Guitar Pro traen ~95 articulaciones (muchas repetidas: varias cajas,
+// cuatro hi-hats…). Se agrupan por sonido: una tecla por pieza, con las que usa la canción primero.
+const DRUM_GROUPS: [string, number[]][] = [
+  ["Bombo", [36, 35]], ["Caja", [38, 40, 37, 39]], ["Hi-hat", [42, 46, 44]],
+  ["Toms", [50, 48, 47, 45, 43, 41]], ["Platillos", [49, 57, 51, 59, 53, 55, 52]],
+];
+const EXTRA_NAMES: Record<number, string> = { 40: "Caja eléctrica", 41: "Tom de piso grave", 59: "Ride 2", 31: "Baquetas", 33: "Metrónomo", 34: "Campana metrónomo", 58: "Vibraslap", 67: "Agogó agudo", 68: "Agogó grave", 69: "Cabasa", 71: "Silbato corto", 72: "Silbato largo", 76: "Bloque agudo", 77: "Bloque grave", 78: "Cuíca apagada", 79: "Cuíca abierta", 80: "Triángulo apagado", 81: "Triángulo", 82: "Shaker", 83: "Cascabeles", 84: "Campanitas", 85: "Castañuelas", 86: "Surdo apagado", 87: "Surdo" };
+let drumMore = false;
+function drumPad(tr: at.model.Track, beat: at.model.Beat | null) {
+  const names = new Map([...DRUM_PIECES, ...LATIN_PIECES].map((p) => [p.id, p.name]));
+  // Cuántas veces usa la canción cada articulación (para elegir la representativa de cada pieza).
+  const used = new Map<number, number>();
+  for (const bar of tr.staves[0].bars) for (const v of bar.voices) for (const b of v.beats) for (const n of b.notes) used.set(n.percussionArticulation, (used.get(n.percussionArticulation) ?? 0) + 1);
+  const byMidi = new Map<number, number>(); // nota MIDI → índice de articulación
+  tr.percussionArticulations.forEach((a, idx) => {
+    const cur = byMidi.get(a.outputMidiNumber);
+    if (cur === undefined || (used.get(idx) ?? 0) > (used.get(cur) ?? 0)) byMidi.set(a.outputMidiNumber, idx);
+  });
+  const label = (m: number) => names.get(m) ?? EXTRA_NAMES[m] ?? tr.percussionArticulations[byMidi.get(m)!]?.elementType ?? `Nota ${m}`;
+  const key = (m: number) => {
+    const idx = byMidi.get(m)!;
+    const midiOn = !!beat?.notes.some((n) => tr.percussionArticulations[n.percussionArticulation]?.outputMidiNumber === m);
+    return h("button", { class: "sbtn dkey", "aria-pressed": midiOn, title: label(m), onclick: () => ed.togglePerc(idx) }, label(m));
+  };
+  const placed = new Set<number>();
+  for (const [group, list] of DRUM_GROUPS) {
+    const keys = list.filter((m) => byMidi.has(m));
+    if (!keys.length) continue;
+    keys.forEach((m) => placed.add(m));
+    ctxStrip.append(h("div", { class: "dgroup" }, h("span", null, group), ...keys.map(key)));
   }
+  const rest = [...byMidi.keys()].filter((m) => !placed.has(m)).sort((a, b) => (used.get(byMidi.get(b)!) ?? 0) - (used.get(byMidi.get(a)!) ?? 0) || a - b);
+  const restUsed = rest.filter((m) => used.has(byMidi.get(m)!));
+  const shown = drumMore ? rest : restUsed;
+  if (shown.length) ctxStrip.append(h("div", { class: "dgroup" }, h("span", null, "Percusión"), ...shown.map(key)));
+  if (rest.length > restUsed.length) ctxStrip.append(h("button", { class: "sbtn dmore", onclick: () => { drumMore = !drumMore; renderCtx(); } }, drumMore ? "Menos piezas" : `Más piezas (${rest.length - restUsed.length})`));
 }
 
 // ---------- cursor sobre la partitura ----------

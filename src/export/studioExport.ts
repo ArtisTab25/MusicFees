@@ -3,7 +3,7 @@
 // Usa las mismas cadenas que el motor en vivo (player/studio.ts): lo que se oye es lo que se graba.
 import * as Tone from "tone";
 import type { MasterFx, TrackFx } from "../score/model";
-import { MasterChain, TrackChain, makeReverb } from "../player/studio";
+import { MasterChain, TrackChain, lightAudio, makeBuses, setLightAudio } from "../player/studio";
 import { createPlugin } from "../player/wam";
 
 const TAIL = 3; // segundos extra para que se apaguen delay y reverb
@@ -16,7 +16,10 @@ async function run(inter: Float32Array, sr: number, tail: number, build: (ctx: T
   const L = buf.getChannelData(0), R = buf.getChannelData(1);
   for (let i = 0; i < frames; i++) { L[i] = inter[i * 2]; R[i] = inter[i * 2 + 1]; }
   const input = new Tone.Gain({ context: ctx });
-  await build(ctx, input);
+  // Exportar siempre en calidad completa (no en tiempo real: no hay riesgo de cortes).
+  const light = lightAudio();
+  setLightAudio(false);
+  try { await build(ctx, input); } finally { setLightAudio(light); }
   const src = ctx.createBufferSource();
   src.buffer = buf;
   Tone.connect(src, input);
@@ -33,9 +36,7 @@ export function processTrack(inter: Float32Array, sr: number, fx: TrackFx | null
   return run(inter, sr, TAIL, async (ctx, input) => {
     const out = new Tone.Gain({ context: ctx });
     out.connect(ctx.destination);
-    const rev = new Tone.Gain({ context: ctx });
-    await makeReverb(ctx, out).then((r) => rev.connect(r));
-    const chain = new TrackChain(ctx, rev, out);
+    const chain = new TrackChain(ctx, await makeBuses(ctx, out), out);
     chain.set(fx);
     // Plugins WAM en el contexto sin conexión; si alguno no carga, se exporta sin él.
     const nodes: AudioNode[] = [];
