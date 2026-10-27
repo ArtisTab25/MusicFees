@@ -340,3 +340,34 @@ body.pinching #cursor, body.pinching .sel-layer, body.pinching .peer-cursor { vi
 .propbar span { flex: 1; }
 .propbar .ghost { color: #fff; border-color: rgba(255,255,255,.6); }
 .tr.cm.done .listbtn { opacity: .55; text-decoration: line-through; }
+
+/* ---------- Accesibilidad ---------- */
+/* Foco visible con teclado */
+:focus-visible { outline: 3px solid #ffd166; outline-offset: 2px; }
+.sheet h2:focus { outline: none; }
+/* Lo activo no depende solo del color: lleva una barra inferior */
+.tbtn[aria-pressed="true"], .sbtn[aria-pressed="true"], .menu-tabs button[aria-pressed="true"], .seg button[aria-pressed="true"] { box-shadow: inset 0 -3px 0 rgba(255,255,255,.85); }
+/* Botones grandes */
+body.big { font-size: 16px; }
+body.big .tbtn, body.big .seg button { height: 44px; min-width: 46px; font-size: 15px; }
+body.big .sbtn { height: 42px; min-width: 52px; font-size: 15px; }
+body.big .pk { height: 52px; font-size: 22px; }
+body.big .pk.txt, body.big .pk.small { font-size: 16px; }
+body.big .transport .play { width: 56px; height: 56px; }
+body.big .chip { height: 54px; }
+body.big .chip .nm { font-size: 20px; }
+body.big .chip .meta { font-size: 13px; }
+body.big .sheet button, body.big .sheet input, body.big .sheet select { min-height: 44px; font-size: 16px; }
+/* Alto contraste */
+body.contrast { --bg: #000; --tool: #0b0b0f; --tool-2: #111118; --btn: #1d1d26; --btn-h: #2a2a36; --line: #d7d7e0; --ink-d: #fff; --muted-d: #e2e2ea; --blue: #2f7bff; --amber: #ffb000; --paper: #fff; --ink: #000; }
+body.contrast .tbtn, body.contrast .sbtn, body.contrast .pk, body.contrast .seg { border: 2px solid #d7d7e0; }
+body.contrast .tbtn[aria-pressed="true"], body.contrast .sbtn[aria-pressed="true"], body.contrast .pk.on { outline: 3px solid #ffd166; outline-offset: -3px; }
+body.contrast #scoreWrap { background: #fff; }
+body.contrast #cursor { outline: 3px solid #000; }
+body.contrast .sel-box { border: 2px dashed #000 !important; }
+body.contrast .note, body.contrast small { color: #f0f0f6; }
+/* Menos movimiento */
+body.still *, body.still *::before, body.still *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+/* En pantallas anchas todas las filas caben: el ▶ sobra */
+@media (min-width: 900px) { .tbtn.more { display: none; } }

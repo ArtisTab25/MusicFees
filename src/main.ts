@@ -427,8 +427,9 @@ function scrollToCursor() {
   requestAnimationFrame(() => {
     if (cursorEl.hidden) return;
     const r = cursorEl.getBoundingClientRect(), wr = scoreWrap.getBoundingClientRect();
-    if (r.top < wr.top + 10 || r.bottom > wr.bottom - 10) scoreWrap.scrollBy({ top: r.top - wr.top - wr.height / 3, behavior: "smooth" });
-    if (r.left < wr.left || r.right > wr.right) scoreWrap.scrollBy({ left: r.left - wr.left - wr.width / 3, behavior: "smooth" });
+    const behavior: ScrollBehavior = document.body.classList.contains("still") ? "auto" : "smooth";
+    if (r.top < wr.top + 10 || r.bottom > wr.bottom - 10) scoreWrap.scrollBy({ top: r.top - wr.top - wr.height / 3, behavior });
+    if (r.left < wr.left || r.right > wr.right) scoreWrap.scrollBy({ left: r.left - wr.left - wr.width / 3, behavior });
   });
 }
 
@@ -785,6 +786,29 @@ export async function importScore(score: at.model.Score, name = "") {
 const who = () => cloud.session?.username || PREFS.name || "Músico";
 export const ctx = { who, ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
 const sheets = new Sheets(ctx);
+// Atajos de la app (teclado de computadora o tableta).
+keys.actions = {
+  play: () => playBtn.click(),
+  menu: () => sheets.menu(),
+  help: () => sheets.help(),
+  sections: () => sheets.sectionsSheet(),
+  comments: () => sheets.commentsSheet(),
+  zoom: (d) => setZoom(d),
+  loop: () => {
+    if (engine.loopRange) { engine.loopBars(null); engine.loop = false; toast("Bucle quitado."); refresh(); return; }
+    const sel = ed.sel ? [ed.sel.a.b, ed.sel.z.b] : [ed.cursor.b, ed.cursor.b];
+    const r = { s: Math.min(...sel), e: Math.max(...sel) };
+    engine.loopBars(r); refresh();
+    toast(`Bucle: compás ${r.s + 1}${r.e > r.s ? `–${r.e + 1}` : ""}.`);
+  },
+  bar: (d) => jumpBar(d),
+  track: (d) => { const n = ed.score.tracks.length; ed.selectTrack((ed.cursor.t + d + n) % n); toast(`${ed.cursor.t + 1}. ${ed.track.name}`); },
+  edge: (end) => { ed.setCursor({ b: end ? ed.score.masterBars.length - 1 : 0, i: 0 }); scrollToCursor(); },
+};
+// Preferencias de accesibilidad
+document.body.classList.toggle("big", PREFS.big === true);
+document.body.classList.toggle("contrast", PREFS.contrast === true);
+document.body.classList.toggle("still", PREFS.still === true || matchMedia("(prefers-reduced-motion: reduce)").matches);
 // Acceso para pruebas automáticas (sin efecto en la app).
 (window as unknown as { __mf?: unknown }).__mf = ctx;
 

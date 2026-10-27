@@ -39,7 +39,23 @@ export const KEY_HELP: KeyHelp[] = [
   { group: "Efectos", keys: "I", what: "Staccato" },
   { group: "Efectos", keys: "U", what: "Unir con la nota anterior (ligadura)" },
   { group: "Teclados y batería", keys: "1 2 4 8 6 3", what: "Duración: redonda, blanca, negra, corchea, semicorchea, fusa" },
+  { group: "Tocar y moverse", keys: "Ctrl + Espacio", what: "Tocar o pausar desde el cursor (también la tecla ⏯ del teclado)" },
+  { group: "Tocar y moverse", keys: "Ctrl + ← →", what: "Compás anterior / siguiente" },
+  { group: "Tocar y moverse", keys: "Ctrl + ↑ ↓", what: "Pista anterior / siguiente" },
+  { group: "Tocar y moverse", keys: "Inicio / Fin", what: "Principio / final de la canción" },
+  { group: "Tocar y moverse", keys: "Ctrl + L", what: "Bucle de la selección o del compás (otra vez: quitarlo)" },
+  { group: "Tocar y moverse", keys: "Ctrl + + / −", what: "Acercar / alejar la partitura (también pellizcando)" },
+  { group: "Ventanas", keys: "Ctrl + M", what: "Menú" },
+  { group: "Ventanas", keys: "Ctrl + E", what: "Secciones de la canción" },
+  { group: "Ventanas", keys: "Ctrl + K", what: "Comentarios" },
+  { group: "Ventanas", keys: "F1  o  ?", what: "Atajos de teclado" },
+  { group: "Ventanas", keys: "Esc", what: "Cerrar la ventana abierta" },
 ];
+/** Acciones de la app que los atajos piden (las pone main). */
+export interface KeyActions {
+  play(): void; menu(): void; help(): void; sections(): void; comments(): void;
+  zoom(d: number): void; loop(): void; bar(d: number): void; track(d: number): void; edge(end: boolean): void;
+}
 
 const FX: Record<string, NoteFx> = { h: "hammer", d: "slide", e: "bend", v: "vibrato", p: "palmMute", l: "letRing", x: "dead", g: "ghost", m: "harmonic", i: "staccato", u: "tie", a: "accent", "!": "heavyAccent" };
 const DURS: Record<string, number> = { r: D.Whole, b: D.Half, n: D.Quarter, c: D.Eighth, s: D.Sixteenth, f: D.ThirtySecond };
@@ -87,12 +103,27 @@ export class KeyInput {
     this.input.value = this.SENT;
     try { this.input.setSelectionRange(this.SENT.length, this.SENT.length); } catch { /* algunos navegadores */ }
   }
+  actions: KeyActions | null = null;
   private onKeyDown(e: KeyboardEvent) {
     if (e.isComposing || e.key === "Unidentified" || e.key === "Process" || e.keyCode === 229) return;
     const k = e.key;
     let handled = true;
-    const mod = e.ctrlKey || e.metaKey, lk = k.toLowerCase();
-    if (mod && lk === "c") this.toast(this.ed.copySel());
+    const mod = e.ctrlKey || e.metaKey, lk = k.toLowerCase(), A = this.actions;
+    if (A && ((mod && k === " ") || k === "MediaPlayPause")) A.play();
+    else if (A && mod && k === "ArrowLeft") A.bar(-1);
+    else if (A && mod && k === "ArrowRight") A.bar(1);
+    else if (A && mod && k === "ArrowUp") A.track(-1);
+    else if (A && mod && k === "ArrowDown") A.track(1);
+    else if (A && k === "Home") A.edge(false);
+    else if (A && k === "End") A.edge(true);
+    else if (A && mod && lk === "l") A.loop();
+    else if (A && mod && (k === "+" || k === "=")) A.zoom(0.1);
+    else if (A && mod && (k === "-" || k === "_")) A.zoom(-0.1);
+    else if (A && mod && lk === "m") A.menu();
+    else if (A && mod && lk === "e") A.sections();
+    else if (A && mod && lk === "k") A.comments();
+    else if (A && (k === "F1" || (k === "?" && !mod))) A.help();
+    else if (mod && lk === "c") this.toast(this.ed.copySel());
     else if (mod && lk === "x") this.toast(this.ed.cutSel());
     else if (mod && lk === "v") this.toast(this.ed.paste());
     else if (mod && lk === "a") this.ed.selectBars(true);

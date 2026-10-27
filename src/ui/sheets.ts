@@ -56,7 +56,11 @@ export class Sheets {
   private el: HTMLElement | null = null;
   constructor(private c: AppCtx) {}
 
-  close() { this.el?.remove(); this.el = null; this.c.refresh(); }
+  close() {
+    this.el?.remove(); this.el = null; this.c.refresh();
+    const r = this.returnFocus; this.returnFocus = null;
+    if (r && r.isConnected && r.id !== "kbd") r.focus({ preventScroll: true });
+  }
   private open(title: string, side: "left" | "right" | "full" | "gate", ...content: (HTMLElement | null)[]) {
     this.el?.remove();
     this.c.keys.blur();
@@ -65,10 +69,27 @@ export class Sheets {
     const card = h("div", { class: "card" },
       h("header", null, h("h2", null, title), closable ? h("button", { class: "ibtn", "aria-label": "Cerrar", onclick: () => this.close() }, icon("close", 20)) : null),
       body);
-    this.el = h("div", { class: `sheet ${side === "gate" ? "full gate" : side}`, role: "dialog", "aria-label": title, onclick: (e: Event) => { if (closable && e.target === this.el) this.close(); } }, card);
-    document.body.append(this.el);
+    this.el = h("div", { class: `sheet ${side === "gate" ? "full gate" : side}`, role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e: Event) => { if (closable && e.target === this.el) this.close(); } }, card);
+    // Teclado: Esc cierra, Tab da vueltas dentro de la hoja y el foco empieza en el título
+    // (no en un campo: en el teléfono eso abriría el teclado sin pedirlo).
+    const sheet = this.el;
+    sheet.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Escape" && closable) { e.preventDefault(); this.close(); return; }
+      if (e.key !== "Tab") return;
+      const f = [...sheet.querySelectorAll<HTMLElement>("button,input,select,textarea,a[href],[tabindex]:not([tabindex='-1'])")].filter((x) => !x.hasAttribute("disabled") && x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    if (!this.returnFocus) this.returnFocus = document.activeElement as HTMLElement | null;
+    document.body.append(sheet);
+    const h2 = card.querySelector("h2") as HTMLElement;
+    h2.tabIndex = -1;
+    requestAnimationFrame(() => h2.focus({ preventScroll: true }));
     return body;
   }
+  private returnFocus: HTMLElement | null = null;
   private ops(ops: Op[]) { this.c.ed.commit(ops); }
 
   // ---------- Tracks: pistas y mezclador ----------
@@ -986,6 +1007,13 @@ export class Sheets {
         toggle("pf-focus", "Modo enfocado", "Muestra solo la pista que estás escribiendo", !this.c.ed.viewAll, (v) => { this.c.ed.viewAll = !v; this.c.ed.rerender(); })),
       h("div", { class: "sec" }, h("h3", null, "Vista"),
         toggle("pf-cont", "Vista continua", "La partitura en una línea horizontal que avanza", prefs.layout === "h", (v) => { prefs.layout = v ? "h" : "p"; engine.setLayout(!v); })),
+      h("div", { class: "sec" }, h("h3", null, "Accesibilidad"),
+        toggle("pf-big", "Botones grandes", "Teclas y botones más altos y letra más grande", prefs.big === true, (v) => { prefs.big = v; document.body.classList.toggle("big", v); }),
+        toggle("pf-hc", "Alto contraste", "Colores más fuertes, bordes marcados y lo activo señalado también con forma, no solo con color", prefs.contrast === true, (v) => { prefs.contrast = v; document.body.classList.toggle("contrast", v); }),
+        toggle("pf-rm", "Menos movimiento", "Sin desplazamientos suaves ni animaciones", prefs.still === true, (v) => { prefs.still = v; document.body.classList.toggle("still", v); }),
+        h("div", { class: "field" }, h("label", { for: "pf-name" }, "Tu nombre (en comentarios, propuestas y con tu dúo)"),
+          (() => { const i = h("input", { id: "pf-name", type: "text", value: String(prefs.name ?? ""), maxlength: 30, placeholder: "Músico" }); i.onchange = () => { prefs.name = i.value.trim(); this.c.savePrefs(); }; return i; })()),
+        h("p", { class: "note" }, "Con teclado: Ctrl + Espacio toca o pausa, Ctrl + ← → cambia de compás, Ctrl + ↑ ↓ de pista, Esc cierra ventanas. Todos los atajos en Ayuda → Atajos de teclado.")),
       h("div", { class: "sec" }, h("h3", null, "Batería y calor"),
         toggle("pf-saver", "Modo ahorro", "Audio ligero, sin animar el cursor ni resaltar notas al tocar; la partitura avanza por página", prefs.saver === true, async (v) => {
           prefs.saver = v; engine.setSaver(v);
