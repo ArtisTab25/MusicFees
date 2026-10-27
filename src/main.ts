@@ -40,8 +40,13 @@ const scoreWrap = h("main", { id: "scoreWrap", "aria-label": "Partitura" }, scor
 const ctxStrip = h("div", { class: "ctxstrip", "aria-label": "Cuerdas" });
 const tools = h("footer", { class: "tools" });
 const paletteHost = h("div", { style: "position:relative;z-index:5;flex:none;height:0" });
+// Barra del modo propuesta: siempre visible mientras se propone, para enviar o descartar.
+const propText = h("span", null, "");
+const propBar = h("div", { class: "propbar", role: "status", hidden: true }, propText,
+  h("button", { class: "ghost", onclick: () => sheets.proposalsSheet() }, "Enviar o descartar"));
 app.append(
   h("header", { class: "top" }, btnTracks, btnLogo, btnSets),
+  propBar,
   h("div", { class: "songline" }, titleEl, peersEl, syncEl),
   scoreWrap, paletteHost, tools,
 );
@@ -120,6 +125,9 @@ const voiceSeg = h("div", { class: "seg", role: "group", "aria-label": "Voz" },
 const btnView = tb("tracks", "Ver todas las pistas", () => { ed.viewAll = !ed.viewAll; ed.rerender(); refresh(); });
 const btnLyrics = tb("mic", "Letra", () => sheets.lyrics(), { text: "Letra" });
 const btnChords = tb("grid", "Acordes", () => sheets.chords(), { text: "Acordes" });
+// Sección donde está el cursor: tocarla abre el navegador de secciones (ir, bucle, duplicar…).
+const btnComments = h("button", { class: "tbtn", title: "Comentarios por compás", "aria-label": "Comentarios por compás", onclick: () => sheets.commentsSheet() }, "💬");
+const btnSection = h("button", { class: "tbtn secnav", title: "Secciones de la canción", "aria-label": "Secciones de la canción", onclick: () => sheets.sectionsSheet() }, "§");
 const palBtns: Record<string, HTMLButtonElement> = {};
 const palDefs: [string, string, string][] = [["bar", "𝄞", "Compás y estructura"], ["note", "♪", "Duración y dinámica"], ["fx", "", "Efectos"], ["text", "", "Texto y acordes"]];
 const greens = h("div", { class: "greens" }, palDefs.map(([id, glyph, label]) => {
@@ -168,7 +176,7 @@ function setMore(on: boolean) {
   PREFS.more = on; savePrefs();
   requestAnimationFrame(() => { drawCursor(); scrollToCursor(); });
 }
-const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnView, btnLyrics, btnChords, greens, btnMore);
+const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnSection, btnComments, btnView, btnLyrics, btnChords, greens, btnMore);
 const btnCompact = tb("chevronDown", "Ocultar o mostrar filas", () => { document.body.classList.toggle("compact"); PREFS.compact = document.body.classList.contains("compact"); savePrefs(); });
 const r2 = h("div", { class: "row r2" },
   tb("home", "Ir al inicio", () => { ed.setCursor({ b: 0, i: 0 }); scoreWrap.scrollTo({ top: 0 }); }),
@@ -376,9 +384,30 @@ function drawSelection(off: ReturnType<typeof surfaceOffset>) {
   }
   selLayer.replaceChildren(...boxes);
 }
+// Comentarios por compás: un globito en la esquina del compás (tocarlo abre los comentarios).
+const noteLayer = h("div", { class: "note-layer" });
+scoreWrap.append(noteLayer);
+let notesKey = "";
+function drawComments(off: ReturnType<typeof surfaceOffset>) {
+  const bl = engine.bounds, list = ed.comments.filter((c) => !c.done);
+  const key = `${list.map((c) => c.id + c.b).join()}|${off?.x},${off?.y}|${engine.api.settings.display.scale}|${bl ? (bl as unknown as { __mf?: number }).__mf ??= Math.random() : 0}`;
+  if (key === notesKey) return;
+  notesKey = key;
+  const byBar = new Map<number, number>();
+  for (const c of list) byBar.set(c.b, (byBar.get(c.b) ?? 0) + 1);
+  const out: HTMLElement[] = [];
+  if (off && bl) for (const [b, n] of byBar) {
+    const mb = bl.findMasterBarByIndex(b);
+    if (!mb) continue;
+    const r = mb.visualBounds;
+    out.push(h("button", { class: "cm-badge", style: `left:${off.x + r.x + r.w - 26}px;top:${off.y + r.y - 4}px`, "aria-label": `${n} comentario${n > 1 ? "s" : ""} en el compás ${b + 1}`, onclick: () => sheets.commentsSheet(b) }, `💬${n > 1 ? n : ""}`));
+  }
+  noteLayer.replaceChildren(...out);
+}
 function drawCursor() {
   const off = surfaceOffset();
   drawSelection(off);
+  drawComments(off);
   const c = ed.cursor;
   const box = off && ed.renderTracks().includes(c.t) ? beatBox(c.t, c.b, c.v, c.i, c.row) : null;
   if (!box || !off) { cursorEl.hidden = true; } else {
@@ -493,6 +522,18 @@ function refresh() {
     h("span", null, n ? (kindOf(tr) === "drums" ? "golpe" : midiName(n.realValue)) : "—"),
   );
   tempoBtn.textContent = `♩ = ${tempo}`;
+  propBar.hidden = !ed.proposal;
+  if (ed.proposal) propText.textContent = `✎ Proponiendo · ${ed.proposalSize} cambio${ed.proposalSize === 1 ? "" : "s"} (no se guardan hasta enviar)`;
+  {
+    const n = ed.comments.filter((c) => !c.done).length;
+    const t = n ? `💬 ${n}` : "💬";
+    if (btnComments.textContent !== t) btnComments.textContent = t;
+  }
+  {
+    const sec = ed.sections.find((x) => ed.cursor.b >= x.b && ed.cursor.b <= x.e);
+    const label = sec && (sec.marker || sec.name !== "Inicio") ? `§ ${sec.name}` : "§ Secciones";
+    if (btnSection.textContent !== label) { btnSection.textContent = label; btnSection.setAttribute("aria-label", `${label.slice(2)}: secciones de la canción`); }
+  }
   zoomVal.textContent = `${Math.round(engine.api.settings.display.scale * 100)}%`;
   speedVal.textContent = `${Math.round(engine.speed * 100)}%`;
   btnUndo.disabled = !ed.canUndo;
@@ -566,17 +607,27 @@ function setSync(msg?: string, err = false) {
   syncEl.classList.toggle("dirty", msg === "● Sin guardar");
 }
 /** Guarda ya en el teléfono (y toma una versión automática cada 10 minutos de edición). */
+/** Lo que se guarda: en modo propuesta, la canción como estaba (lo propuesto no se guarda). */
+const savedJson = () => ed.proposal?.base ?? ed.json();
 function saveLocalNow() {
   clearTimeout(saveLocalT);
   if (!songId) return;
-  const json = ed.json();
+  const json = savedJson();
   saveLocalDoc(songId, json);
   rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
   if (isCloud || isClaudeId(songId)) markPending(songId);
-  void addVersion(songId, ed.score.title || "Sin título", json, "", true).catch(() => { /* sin IndexedDB */ });
+  const id = songId, title = ed.score.title || "Sin título";
+  void addVersion(id, title, json, "", true).then((made) => {
+    // Las canciones de tu cuenta también guardan una versión en la nube, como mucho una por hora.
+    if (!made || !isCloud || !cloud.session) return;
+    const last = Number(sessionStorage.getItem(`mf:cv:${id}`) || 0);
+    if (Date.now() - last < 3_600_000) return;
+    void cloud.pushVersion(id, title, json, "", true).then((ok) => { if (ok) try { sessionStorage.setItem(`mf:cv:${id}`, String(Date.now())); } catch { /* nada */ } });
+  }).catch(() => { /* sin IndexedDB */ });
   if (!isCloud && !isClaudeId(songId)) { savedAt = Date.now(); setSync(); }
 }
 ed.onDirty = () => {
+  if (ed.proposal) { setSync("✎ Propuesta: se guarda al enviarla"); return; }
   setSync("● Sin guardar");
   clearTimeout(saveLocalT);
   saveLocalT = window.setTimeout(() => { saveLocalT = 0; saveLocalNow(); }, 500);
@@ -591,7 +642,7 @@ function scheduleClaudeSave(delay = 2000) {
     if (!claudeLib || !isClaudeId(songId)) return;
     const id = songId!;
     setSync("Guardando…");
-    try { await claudeLib.save(id.slice(7), ed.score.title, ed.json()); clearPending(id); savedAt = Date.now(); setSync(); }
+    try { await claudeLib.save(id.slice(7), ed.score.title, savedJson()); clearPending(id); savedAt = Date.now(); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
@@ -603,7 +654,7 @@ function scheduleCloudSave(delay = 1500) {
     if (live && !live.isHost) return; // guarda quien es anfitrión mientras los dos están conectados
     const id = songId;
     setSync("Guardando…");
-    try { await cloud.save(id, ed.score.title, ed.json()); clearPending(id); savedAt = Date.now(); setSync(); }
+    try { await cloud.save(id, ed.score.title, savedJson()); clearPending(id); savedAt = Date.now(); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
@@ -631,7 +682,7 @@ function startLive(id: string) {
   live = new LiveSession(cloud, id, name, color);
   ed.outbox = (ops) => live?.sendOps(ops);
   live.onOps = (ops) => { ed.applyRemote(ops); if (live?.isHost) scheduleCloudSave(); };
-  live.onSnapshotRequest = (from) => { if (live?.isHost && from !== clientId) live.sendSnapshot(from, ed.json()); };
+  live.onSnapshotRequest = (from) => { if (live?.isHost && from !== clientId) live.sendSnapshot(from, savedJson()); };
   live.onSnapshot = (json) => { ed.replaceScore(fromJson(json), true); toast("Sincronizado con tu dúo."); };
   live.onReloadHint = () => setTimeout(async () => {
     try { const row = await cloud.get(id); if (row) ed.replaceScore(fromJson(row.data), true); } catch { /* se reintenta con el siguiente cambio */ }
@@ -731,7 +782,8 @@ export async function importScore(score: at.model.Score, name = "") {
   if (!score.title) score.title = name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "Importada";
   await addSong(score);
 }
-export const ctx = { ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
+const who = () => cloud.session?.username || PREFS.name || "Músico";
+export const ctx = { who, ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
 const sheets = new Sheets(ctx);
 // Acceso para pruebas automáticas (sin efecto en la app).
 (window as unknown as { __mf?: unknown }).__mf = ctx;

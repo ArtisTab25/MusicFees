@@ -327,3 +327,16 @@ body.more .tools .r2, body.more .tools .r3 { display: flex !important; flex-wrap
 /* Pellizco: el cursor y la selección se esconden mientras la imagen se escala */
 #score { will-change: auto; }
 body.pinching #cursor, body.pinching .sel-layer, body.pinching .peer-cursor { visibility: hidden; }
+.tbtn.secnav { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; line-height: 34px; }
+/* Biblioteca: búsqueda, carpetas y etiquetas */
+.libfilters { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.libfilters .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.orgbox { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 0 2px; }
+.orgbox input { flex: 1 1 140px; min-width: 0; }
+/* Comentarios y propuestas */
+.note-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 3; }
+.cm-badge { position: absolute; height: 24px; min-width: 26px; padding: 0 4px; border-radius: 12px; border: 0; background: #f2a33a; color: #1b1300; font-size: 12px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+.propbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--blue); color: #fff; font-weight: 600; font-size: 13px; }
+.propbar span { flex: 1; }
+.propbar .ghost { color: #fff; border-color: rgba(255,255,255,.6); }
+.tr.cm.done .listbtn { opacity: .55; text-decoration: line-through; }

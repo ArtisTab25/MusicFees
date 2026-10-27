@@ -2,7 +2,7 @@
 import * as at from "@coderline/alphatab";
 import {
   applyOp, barCapacity, beatAt, beatTicks, bendShapeOf, tempoAt, tempoChanges, dynIndex, finishScore, fromJson, kindOf, noteFxState, type BendShape,
-  rowToString, stringToRow, toJson, metaMap, voiceUsed, type BeatRef, type Kind, type NoteFx, type Op,
+  rowToString, stringToRow, toJson, metaMap, voiceUsed, comments, proposals, type BarComment, type Proposal, type BeatRef, type Kind, type NoteFx, type Op,
 } from "../score/model";
 import type { Engine } from "../player/engine";
 import { copy, countSelected, loadClip, ordered, planClear, planDeleteBars, planPaste, planTranspose, restsFor, saveClip, type Clip, type Selection } from "../score/clip";
@@ -31,6 +31,8 @@ export class Editor {
   private digitBuf = { key: "", first: -1, at: 0 };
   /** Selección activa (una pista y una voz; puede cruzar compases). */
   sel: Selection | null = null;
+  /** Modo propuesta: lo que se edita no se guarda ni se manda al dúo hasta enviarlo como propuesta. */
+  proposal: { base: string; batches: Op[][]; redo: Op[][]; undo: string[]; at: number } | null = null;
   /** Modo selección: mover el cursor extiende la selección (celular: botón o toque largo). */
   selecting = false;
 
@@ -94,9 +96,16 @@ export class Editor {
     if (opts.history !== false) {
       // Si lo anterior todavía no se pasó a JSON es que se está escribiendo seguido: esos cambios
       // se deshacen juntos (el paso anterior del historial ya guarda cómo estaba antes).
-      if (this.cleanJson !== null || !this.unsnapped) {
+      const fresh = this.cleanJson !== null || !this.unsnapped;
+      if (fresh) {
         this.undoStack.push(this.json());
         if (this.undoStack.length > 60) this.undoStack.shift();
+      }
+      // Modo propuesta: cada paso del historial guarda sus operaciones (para mandarlas juntas).
+      if (this.proposal) {
+        if (fresh || !this.proposal.batches.length) this.proposal.batches.push([]);
+        this.proposal.batches[this.proposal.batches.length - 1].push(...ops);
+        this.proposal.redo.length = 0;
       }
       this.redoStack.length = 0;
     }
@@ -104,7 +113,7 @@ export class Editor {
     finishScore(this.score);
     this.changed(true);
     this.clampCursor();
-    this.outbox?.(ops);
+    if (!this.proposal) this.outbox?.(ops);
     this.onDirty?.();
     if (opts.render !== false) this.rerender(firstBar(ops));
     // Efectos y masterizado no cambian el dibujo: se aplican directo al motor de estudio
@@ -114,6 +123,8 @@ export class Editor {
   }
   /** Cambios que llegan del dúo: sin historial ni reenvío. */
   applyRemote(ops: Op[]) {
+    // Durante una propuesta lo del dúo también llega a la canción de base (a la que se vuelve al terminar).
+    if (this.proposal) { let b = fromJson(this.proposal.base); for (const op of ops) b = applyOp(b, op); finishScore(b); this.proposal.base = toJson(b); }
     for (const op of ops) this.score = applyOp(this.score, op);
     finishScore(this.score);
     this.changed(false);
@@ -136,14 +147,17 @@ export class Editor {
   get canUndo() { return this.undoStack.length > 0; }
   get canRedo() { return this.redoStack.length > 0; }
   undo() {
+    // En una propuesta no se puede deshacer más atrás de donde empezó.
+    if (this.proposal && !this.proposal.batches.length) { this.onBlocked?.("Ya estás en la canción como estaba al empezar la propuesta."); return; }
     const prev = this.undoStack.pop();
     if (!prev) return;
+    if (this.proposal) this.proposal.redo.push(this.proposal.batches.pop()!);
     this.redoStack.push(this.json());
     this.score = fromJson(prev);
     finishScore(this.score);
     this.cleanJson = prev; this.unsnapped = false;
     this.clampCursor();
-    this.outbox?.([{ k: "load", json: prev }]);
+    if (!this.proposal) this.outbox?.([{ k: "load", json: prev }]);
     this.onDirty?.();
     this.rerender();
     this.emit();
@@ -151,12 +165,13 @@ export class Editor {
   redo() {
     const next = this.redoStack.pop();
     if (!next) return;
+    if (this.proposal) { const b = this.proposal.redo.pop(); if (b) this.proposal.batches.push(b); }
     this.undoStack.push(this.json());
     this.score = fromJson(next);
     finishScore(this.score);
     this.cleanJson = next; this.unsnapped = false;
     this.clampCursor();
-    this.outbox?.([{ k: "load", json: next }]);
+    if (!this.proposal) this.outbox?.([{ k: "load", json: next }]);
     this.onDirty?.();
     this.rerender();
     this.emit();
@@ -446,6 +461,54 @@ export class Editor {
     this.setCursor({ b: Math.min(ordered(t).s.b, this.track.staves[0].bars.length - 1), i: 0 });
     return `Se borraron ${n} ${n > 1 ? "compases" : "compás"}.`;
   }
+  // ---------- comentarios y propuestas ----------
+  get comments(): BarComment[] { return comments(this.score); }
+  get proposals(): Proposal[] { return proposals(this.score); }
+  addComment(b: number, text: string, by: string) {
+    const t = text.trim();
+    if (!t) return;
+    this.commit([{ k: "comment", c: { id: crypto.randomUUID(), b, text: t, by, at: Date.now() } }]);
+  }
+  setCommentDone(c: BarComment, done: boolean) { this.commit([{ k: "comment", c: { ...c, done } }]); }
+  deleteComment(id: string) { this.commit([{ k: "comment", del: id }]); }
+  startProposal() {
+    if (this.proposal) return;
+    this.proposal = { base: this.json(), batches: [], redo: [], undo: this.undoStack.slice(), at: Date.now() };
+    this.redoStack.length = 0;
+    this.emit();
+  }
+  get proposalSize() { return this.proposal ? this.proposal.batches.reduce((n, b) => n + b.length, 0) : 0; }
+  /** Vuelve a la canción como estaba al empezar (lo editado se descarta o se guarda como propuesta). */
+  private endProposal(): { ops: Op[]; base: string } | null {
+    const p = this.proposal;
+    if (!p) return null;
+    this.proposal = null;
+    const ops = p.batches.flat();
+    this.score = fromJson(p.base);
+    finishScore(this.score);
+    this.undoStack = p.undo; this.redoStack.length = 0;
+    this.changed(false);
+    this.clampCursor();
+    this.rerender();
+    return { ops, base: p.base };
+  }
+  discardProposal() { this.endProposal(); this.emit(); }
+  sendProposal(title: string, by: string): string {
+    const r = this.endProposal();
+    if (!r || !r.ops.length) { this.emit(); return "La propuesta no tenía cambios."; }
+    this.commit([{ k: "proposal", p: { id: crypto.randomUUID(), title: title.trim() || "Propuesta", by, at: Date.now(), ops: r.ops, bars: this.score.masterBars.length, tracks: this.score.tracks.length } }]);
+    return `Propuesta enviada (${r.ops.length} cambio${r.ops.length > 1 ? "s" : ""}). Quien edite la canción la verá en Propuestas.`;
+  }
+  /** Aplica una propuesta (se puede deshacer) y la quita de la lista. */
+  acceptProposal(id: string): string {
+    const p = this.proposals.find((x) => x.id === id);
+    if (!p) return "";
+    const moved = p.bars !== this.score.masterBars.length || p.tracks !== this.score.tracks.length;
+    this.commit([...p.ops, { k: "proposal", del: id }]);
+    return `Aplicada «${p.title}» de ${p.by}.${moved ? " Ojo: la canción cambió de compases o pistas desde que se propuso; revisa el resultado (deshacer la quita)." : " Deshacer la quita."}`;
+  }
+  rejectProposal(id: string) { this.commit([{ k: "proposal", del: id }]); }
+
   // ---------- obra completa: secciones como bloques ----------
   get sections(): SectionBlock[] { return sections(this.score); }
   gotoBar(b: number) { this.clearSelection(); this.setCursor({ b: Math.max(0, Math.min(b, this.score.masterBars.length - 1)), i: 0 }); }

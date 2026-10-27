@@ -129,11 +129,45 @@ export class Cloud {
   setPassword(id: string, pass: string) { return this.admin<void>({ action: "password", id, password: pass }); }
   deleteUser(id: string) { return this.admin<void>({ action: "delete", id }); }
   // ---------- mi biblioteca ----------
-  async mySongs() {
-    const { data, error } = await this.sb.from("mf_songs").select("id, title, updated_at").eq("owner_id", this.session?.userId ?? "").order("updated_at", { ascending: false });
+  /** true cuando la base ya tiene carpetas, etiquetas y versiones (migración 004). */
+  has004: boolean | null = null;
+  async mySongs(): Promise<{ id: string; title: string; updated_at: string; folder?: string | null; tags?: string[] }[]> {
+    const q = (cols: string) => this.sb.from("mf_songs").select(cols).eq("owner_id", this.session?.userId ?? "").order("updated_at", { ascending: false });
+    if (this.has004 !== false) {
+      const { data, error } = await q("id, title, updated_at, folder, tags");
+      if (!error) { this.has004 = true; return data as unknown as { id: string; title: string; updated_at: string; folder: string | null; tags: string[] }[]; }
+      if (!/folder|tags|column/i.test(error.message)) throw this.explain(error);
+      this.has004 = false;
+    }
+    const { data, error } = await q("id, title, updated_at");
     if (error) throw this.explain(error);
-    return data as { id: string; title: string; updated_at: string }[];
+    return data as unknown as { id: string; title: string; updated_at: string }[];
   }
+  /** Carpeta y etiquetas de una canción propia en la nube (si la base ya las tiene). */
+  async organize(id: string, folder: string | null, tags: string[]): Promise<boolean> {
+    if (!this.session || this.has004 === false) return false;
+    const { error } = await this.sb.from("mf_songs").update({ folder, tags }).eq("id", id);
+    if (error) { if (/folder|tags|column/i.test(error.message)) this.has004 = false; return false; }
+    return true;
+  }
+  // ---------- versiones en la nube ----------
+  async cloudVersions(song: string): Promise<{ id: string; label: string; auto: boolean; created_at: string; title: string; size: number }[]> {
+    if (!this.session || this.has004 === false) return [];
+    const { data, error } = await this.sb.from("mf_versions").select("id, label, auto, created_at, title, data").eq("song_id", song).order("created_at", { ascending: false }).limit(40);
+    if (error) { if (/mf_versions|schema cache|does not exist/i.test(error.message)) this.has004 = false; return []; }
+    return (data as { id: string; label: string; auto: boolean; created_at: string; title: string; data: string }[]).map((x) => ({ id: x.id, label: x.label, auto: x.auto, created_at: x.created_at, title: x.title, size: x.data.length }));
+  }
+  async cloudVersionData(id: string): Promise<string | null> {
+    const { data, error } = await this.sb.from("mf_versions").select("data").eq("id", id).maybeSingle();
+    return error || !data ? null : (data as { data: string }).data;
+  }
+  async pushVersion(song: string, title: string, data: string, label: string, auto: boolean): Promise<boolean> {
+    if (!this.session || this.has004 === false) return false;
+    const { error } = await this.sb.from("mf_versions").insert({ song_id: song, title: title.slice(0, 120), label: label.slice(0, 80), auto, data });
+    if (error) { if (/mf_versions|schema cache|does not exist/i.test(error.message)) this.has004 = false; return false; }
+    return true;
+  }
+  async deleteCloudVersion(id: string) { await this.sb.from("mf_versions").delete().eq("id", id); }
   async createMine(title: string, data: string) {
     const { data: row, error } = await this.sb.from("mf_songs").insert({ title: title.slice(0, 120) || "Sin título", data, owner_id: this.session?.userId }).select("id").single();
     if (error) throw this.explain(error);

@@ -347,3 +347,68 @@ test("obra completa: secciones como bloques, doble/mitad de tiempo, métrica y t
   const gp = new at.exporter.Gp7Exporter().export(s, settings);
   assert.ok(gp.length > 1000);
 });
+
+test("pistas: exportar una parte, fusionar y dividir", async () => {
+  const T = await import("../src/score/tracks");
+  const s = createSong("hard_rock", 4, "Pistas");
+  const g = s.tracks[0], low = rowToString(g, 5);
+  applyOp(s, { k: "fret", t: 0, b: 1, v: 0, i: 0, str: low, fret: 3 });
+  applyOp(s, { k: "fret", t: 1, b: 2, v: 0, i: 0, str: rowToString(s.tracks[1], 0), fret: 5 });
+  applyOp(s, { k: "barProp", b: 2, prop: "tempo", val: 150 });
+  applyOp(s, { k: "trackAdd", preset: "piano" });
+  const p = s.tracks.length - 1;
+  applyOp(s, { k: "pitch", t: p, b: 0, v: 0, i: 0, pitch: 48, on: true });
+  applyOp(s, { k: "pitch", t: p, b: 0, v: 0, i: 0, pitch: 72, on: true });
+  finishScore(s);
+  const n0 = s.tracks.length;
+  // Una sola pista / solo compases 3–4 (con su tempo)
+  const one = T.subScore(s, { tracks: [p] });
+  assert.equal(one.tracks.length, 1); assert.equal(one.tracks[0].name, s.tracks[p].name);
+  const part = T.subScore(s, { bars: { s: 2, e: 3 } });
+  assert.equal(part.masterBars.length, 2);
+  assert.equal(Math.round((await import("../src/score/model")).tempoAt(part, 0)), 150);
+  assert.equal(s.masterBars.length, 4, "la canción original no cambia");
+  // Fusionar la segunda guitarra en la primera: queda en la voz 2
+  const m = T.planMerge(s, 1, 0);
+  assert.equal(m.error, undefined);
+  for (const op of m.ops) applyOp(s, op); finishScore(s);
+  assert.equal(s.tracks.length, n0 - 1);
+  assert.deepEqual(T.usedVoices(s, 0), [0, 1]);
+  assert.equal(s.tracks[0].staves[0].bars[2].voices[1].beats[0].notes.length, 1);
+  // Separar voces: vuelve a haber dos pistas
+  const sv = T.planSplitVoices(s, 0);
+  assert.equal(sv.made, 1);
+  let sc = s;
+  for (const op of sv.ops) sc = applyOp(sc, op); finishScore(sc);
+  assert.equal(sc.tracks.length, n0);
+  assert.deepEqual(T.usedVoices(sc, 0), [0]); assert.deepEqual(T.usedVoices(sc, 1), [0]);
+  assert.match(sc.tracks[1].name, /voz 2/);
+  // Dividir el piano por altura: Do3 abajo, Do5 arriba, clave de Fa en la grave
+  const pi = sc.tracks.length - 1;
+  const sp = T.planSplitPitch(sc, pi);
+  assert.equal(sp.low, 1); assert.equal(sp.high, 1);
+  for (const op of sp.ops) sc = applyOp(sc, op); finishScore(sc);
+  assert.equal(sc.tracks[pi].staves[0].bars[0].voices[0].beats[0].notes[0].realValue, 72);
+  assert.equal(sc.tracks[pi + 1].staves[0].bars[0].voices[0].beats[0].notes[0].realValue, 48);
+  assert.equal(sc.tracks[pi + 1].staves[0].bars[0].clef, at.model.Clef.F4);
+  assert.ok(new at.exporter.Gp7Exporter().export(sc, settings).length > 1000);
+});
+
+test("comentarios siguen a su compás y las propuestas viajan con la canción", async () => {
+  const M2 = await import("../src/score/model");
+  const s = createSong("blank_gtr", 4, "Dúo");
+  applyOp(s, { k: "comment", c: { id: "a", b: 2, text: "entra la voz", by: "Axel", at: 1 } });
+  applyOp(s, { k: "comment", c: { id: "b", b: 1, text: "más suave", by: "Ana", at: 2 } });
+  applyOp(s, { k: "barIns", at: 0 }); finishScore(s);
+  assert.deepEqual(M2.comments(s).map((c) => [c.id, c.b]), [["b", 2], ["a", 3]]);
+  applyOp(s, { k: "barDel", at: 2 }); finishScore(s);
+  assert.deepEqual(M2.comments(s).map((c) => [c.id, c.b]), [["a", 2]], "el del compás borrado se va");
+  applyOp(s, { k: "comment", c: { ...M2.comments(s)[0], done: true } });
+  assert.equal(M2.comments(s)[0].done, true);
+  applyOp(s, { k: "proposal", p: { id: "p1", title: "otro final", by: "Ana", at: 3, ops: [{ k: "barIns", at: 0 }], bars: 4, tracks: 1 } });
+  const back = fromJson(toJson(s));
+  assert.equal(M2.proposals(back)[0].title, "otro final");
+  assert.equal(M2.comments(back).length, 1);
+  applyOp(back, { k: "proposal", del: "p1" });
+  assert.equal(M2.proposals(back).length, 0);
+});

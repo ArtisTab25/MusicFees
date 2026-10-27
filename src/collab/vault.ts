@@ -68,3 +68,20 @@ function writePending(m: Record<string, number>) { try { localStorage.setItem(PE
 export function markPending(song: string) { const m = pendingMap(); m[song] = Date.now(); writePending(m); }
 export function clearPending(song: string) { const m = pendingMap(); delete m[song]; writePending(m); }
 export const pendingSince = (song: string): number | null => pendingMap()[song] ?? null;
+
+// ---------- carpetas y etiquetas de la biblioteca ----------
+// Se guardan en el dispositivo para todas las canciones; las de la nube también se guardan en la
+// base (cuando ya tiene la migración 004), así se ven igual en el teléfono y en la computadora.
+export interface LibMeta { folder?: string | null; tags?: string[] }
+const META = "mf:libmeta";
+function metaAll(): Record<string, LibMeta> { try { return JSON.parse(localStorage.getItem(META) || "{}"); } catch { return {}; } }
+export const libMeta = (id: string): LibMeta => metaAll()[id] ?? {};
+export function setLibMeta(id: string, m: LibMeta) {
+  const all = metaAll();
+  const clean: LibMeta = { folder: m.folder?.trim().slice(0, 80) || null, tags: [...new Set((m.tags ?? []).map((t) => t.trim().toLowerCase().slice(0, 30)).filter(Boolean))].slice(0, 12) };
+  if (!clean.folder && !clean.tags?.length) delete all[id]; else all[id] = clean;
+  try { localStorage.setItem(META, JSON.stringify(all)); } catch { /* lleno */ }
+  return clean;
+}
+/** Texto «Carpeta, etiqueta1, etiqueta2» → partes. */
+export const parseTags = (s: string) => s.split(/[,#]/).map((x) => x.trim()).filter(Boolean);

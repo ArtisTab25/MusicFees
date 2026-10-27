@@ -54,7 +54,10 @@ export type Op =
   | { k: "trackDup"; t: number; empty?: boolean }
   | { k: "retune"; t: number; tuning: number[] }
   | { k: "trackMeta"; t: number; meta: Partial<TrackMeta> }
-  | { k: "trackPaste"; json: string; name?: string };
+  | { k: "trackPaste"; json: string; name?: string }
+  // Colaboración: comentario por compás (con id: agregar o reemplazar; del: quitar) y propuestas
+  | { k: "comment"; c?: BarComment; del?: string }
+  | { k: "proposal"; p?: Proposal; del?: string };
 
 /** Formas de bend que se escriben con un toque (valores en cuartos de tono: 4 = un tono). */
 export type BendShape = "none" | "half" | "full" | "oneHalf" | "double" | "release" | "prebend" | "prebendRelease";
@@ -150,6 +153,29 @@ function remapTrackData(score: Score, newIndexOf: (old: number) => number | null
   writeMeta(score, move(metaMap(score)));
 }
 
+// ---------- comentarios por compás y propuestas (viajan con la canción y con el dúo) ----------
+const CM_TAG = "MFCM1:", PR_TAG = "MFPR1:";
+export interface BarComment { id: string; b: number; text: string; by: string; at: number; done?: boolean }
+export interface Proposal { id: string; title: string; by: string; at: number; ops: Op[]; bars: number; tracks: number }
+function readTag<T>(score: Score, tag: string, empty: T): T {
+  const line = (score.notices || "").split("\n").find((l) => l.startsWith(tag));
+  if (!line) return empty;
+  try { return JSON.parse(line.slice(tag.length)) as T; } catch { return empty; }
+}
+function writeTag(score: Score, tag: string, val: unknown[]) {
+  const rest = (score.notices || "").split("\n").filter((l) => l && !l.startsWith(tag));
+  if (val.length) rest.push(tag + JSON.stringify(val));
+  score.notices = rest.join("\n");
+}
+export const comments = (score: Score) => readTag<BarComment[]>(score, CM_TAG, []);
+export const proposals = (score: Score) => readTag<Proposal[]>(score, PR_TAG, []);
+/** Al insertar o borrar compases, los comentarios siguen a su compás (los del compás borrado se van). */
+function shiftComments(score: Score, at: number, d: 1 | -1) {
+  const list = comments(score);
+  if (!list.length) return;
+  writeTag(score, CM_TAG, list.filter((c) => !(d < 0 && c.b === at)).map((c) => (c.b >= at + (d < 0 ? 1 : 0) ? { ...c, b: c.b + d } : c)));
+}
+
 /** Nota independiente del instrumento: altura real (o pieza de batería por su número MIDI). */
 export interface ClipNote { pitch?: number; str?: number; fret?: number; drum?: number; fx: NoteFx[]; bend?: { type: number; pts: [number, number][] } }
 /** Tiempo independiente del instrumento, para el portapapeles y la operación setVoice. */
@@ -159,7 +185,7 @@ export const NOTE_FX_ALL: NoteFx[] = ["hammer", "slide", "bend", "vibrato", "pal
 export type NoteFx = "hammer" | "slide" | "bend" | "vibrato" | "palmMute" | "letRing" | "dead" | "ghost" | "accent" | "heavyAccent" | "harmonic" | "staccato" | "tie";
 export type BeatFx = "dynamics" | "crescendo" | "tap" | "slap" | "pop" | "text" | "chord" | "pickStroke" | "fadeIn" | "brush" | "vibratoBeat";
 export type BarProp = "ts" | "repeatOpen" | "repeatClose" | "section" | "tempo" | "doubleBar" | "key" | "alternate";
-export type TrackProp = "name" | "program" | "tuning" | "capo" | "volume" | "balance" | "showTab" | "showNotation" | "color" | "mute" | "solo";
+export type TrackProp = "name" | "program" | "tuning" | "capo" | "clef" | "volume" | "balance" | "showTab" | "showNotation" | "color" | "mute" | "solo";
 export type SongProp = "title" | "artist" | "album" | "words" | "music" | "tempo";
 
 // ---------- utilidades ----------
@@ -388,6 +414,7 @@ function rebuildBars(score: Score, masterBars: at.model.MasterBar[], perStaff: M
 }
 function insertBar(score: Score, atIndex: number) {
   const idx = Math.max(0, Math.min(atIndex, score.masterBars.length));
+  shiftComments(score, idx, 1);
   const ref = score.masterBars[Math.max(0, idx - 1)];
   const mb = new M.MasterBar();
   if (ref) {
@@ -425,6 +452,7 @@ function insertBar(score: Score, atIndex: number) {
 }
 function deleteBar(score: Score, atIndex: number) {
   if (score.masterBars.length <= 1 || atIndex < 0 || atIndex >= score.masterBars.length) return;
+  shiftComments(score, atIndex, -1);
   const mbs = score.masterBars.slice();
   const removed = mbs.splice(atIndex, 1)[0];
   // Si el compás borrado tenía el tempo inicial, se conserva en el siguiente.
@@ -522,6 +550,18 @@ export function applyOp(score: Score, op: Op): Score {
     case "trackPaste": return pasteTrack(score, op.json, op.name);
     case "retune": retune(score, op.t, op.tuning); break;
     case "trackMeta": setMeta(score, op.t, op.meta); break;
+    case "comment": {
+      const list = comments(score).filter((c) => c.id !== (op.c?.id ?? op.del));
+      if (op.c) list.push({ ...op.c, text: String(op.c.text).slice(0, 500) });
+      writeTag(score, CM_TAG, list.sort((a, b) => a.b - b.b || a.at - b.at));
+      break;
+    }
+    case "proposal": {
+      const list = proposals(score).filter((p) => p.id !== (op.p?.id ?? op.del));
+      if (op.p) list.push(op.p);
+      writeTag(score, PR_TAG, list);
+      break;
+    }
     case "fret": {
       const beat = beatAt(score, op);
       if (!beat) break;
@@ -732,6 +772,11 @@ export function applyOp(score: Score, op: Op): Score {
           break;
         case "tuning": if (Array.isArray(v) && v.length === st.tuning.length) st.stringTuning = new M.Tuning("", (v as number[]).slice(), false); break;
         case "capo": st.capo = Math.max(0, Math.min(12, Number(v))); break;
+        case "clef": {
+          const c = ({ G2: M.Clef.G2, F4: M.Clef.F4, C3: M.Clef.C3, C4: M.Clef.C4 } as Record<string, at.model.Clef>)[String(v)];
+          if (c !== undefined) for (const bar of st.bars) bar.clef = c;
+          break;
+        }
         case "volume": tr.playbackInfo.volume = Math.max(0, Math.min(16, Number(v))); break;
         case "balance": tr.playbackInfo.balance = Math.max(0, Math.min(16, Number(v))); break;
         case "showTab": if (st.isStringed) st.showTablature = !!v; if (!st.showTablature && !st.showStandardNotation) st.showStandardNotation = true; break;

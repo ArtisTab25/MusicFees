@@ -8,12 +8,13 @@ import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
 import { kindOf, fxMap, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { Capacitor } from "@capacitor/core";
-import { addVersion, deleteTrash, deleteVersion, trash, trashList, versions } from "../collab/vault";
+import { addVersion, deleteTrash, deleteVersion, libMeta, parseTags, setLibMeta, trash, trashList, versions, type LibMeta } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
 import { STRUMS } from "../score/strum";
 import { ordered } from "../score/clip";
+import { mergeTargets, planMerge, planSplitPitch, planSplitVoices, subScore, usedVoices } from "../score/tracks";
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
 import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
@@ -22,6 +23,8 @@ import { ARTIFACT } from "../config";
 import type { Bank } from "../player/banks";
 
 export interface AppCtx {
+  /** Nombre con el que se firman comentarios y propuestas. */
+  who: () => string;
   ed: Editor; engine: Engine; keys: KeyInput; cloud: Cloud;
   claudeLib: ClaudeLibrary | null;
   addSong: (s: at.model.Score, toCloud?: boolean) => Promise<string>;
@@ -158,6 +161,28 @@ export class Sheets {
         act("Propiedades y efectos", "Sonido, kit, volumen, efectos, plugins", () => { ed.selectTrack(i); this.sets("track"); }),
         act("Borrar pista", "", () => { if (ed.score.tracks.length <= 1) { this.c.toast("La canción necesita al menos una pista."); return; } this.ops([{ k: "trackDel", t: i }]); if (ed.cursor.t >= ed.score.tracks.length) ed.selectTrack(ed.score.tracks.length - 1); this.c.toast(`Se borró «${tr.name}». Deshacer la regresa.`); this.close(); }, true))),
     ];
+    // Fusionar, dividir y exportar solo esta pista
+    {
+      const targets = mergeTargets(ed.score, i);
+      const into = h("select", { "aria-label": "Fusionar con" }, targets.map((t) => h("option", { value: t }, `${t + 1}. ${ed.score.tracks[t].name}`)));
+      const voices = usedVoices(ed.score, i);
+      sections.push(h("div", { class: "sec" }, h("h3", null, "Fusionar, dividir y exportar"),
+        targets.length ? h("div", { class: "inline" }, h("span", null, "Fusionar con"), into, h("button", { class: "ghost", onclick: () => {
+          const to = Number(into.value), { ops, error } = planMerge(ed.score, i, to);
+          if (error) { this.c.toast(error, true); return; }
+          const name = ed.score.tracks[to].name;
+          this.ops(ops); ed.selectTrack(to > i ? to - 1 : to);
+          this.c.toast(`«${tr.name}» quedó dentro de «${name}», en sus propias voces. Deshacer la separa.`); this.close();
+        } }, "Fusionar")) : h("p", { class: "note" }, "No hay otra pista del mismo tipo para fusionar."),
+        h("div", { class: "menu-grid" },
+          voices.some((v) => v > 0) ? act("Separar voces en pistas", `Voces ${voices.filter((v) => v > 0).map((v) => v + 1).join(", ")} a pistas nuevas`, () => {
+            const { ops, made } = planSplitVoices(ed.score, i); this.ops(ops); this.c.toast(`${made} pista${made > 1 ? "s" : ""} nueva${made > 1 ? "s" : ""}, una por voz.`); this.close();
+          }) : null,
+          kind !== "drums" ? act("Dividir por altura", "Graves (bajo el Do central) a una pista nueva en clave de Fa", () => {
+            const { ops, low, high } = planSplitPitch(ed.score, i); this.ops(ops); this.c.toast(`Agudas: ${high} notas · graves: ${low} notas en «${tr.name} · grave».`); this.close();
+          }) : null,
+          act("Exportar solo esta pista", "Audio, Guitar Pro, MIDI o PDF", () => { ed.selectTrack(i); this.exportDialog({ scope: "track" }); }))));
+    }
     if (kind !== "drums") sections.push(h("div", { class: "sec" }, h("h3", null, "Transponer toda la pista"), h("div", { class: "inline" },
       ...([[-12, "−8va"], [-2, "−1 tono"], [-1, "−½"], [1, "+½"], [2, "+1 tono"], [12, "+8va"]] as [number, string][]).map(([n, l]) => h("button", { class: "ghost", onclick: () => this.c.toast(ed.transposeTrack(i, n)) }, l)))));
     if (kind === "tab") {
@@ -345,7 +370,7 @@ export class Sheets {
   menu(section = "Archivo") {
     const { ed, engine } = this.c;
     const body = this.open("MusicFees", "full");
-    const sections = ["Archivo", "Editar", "Pista", "Compás", "Nota", "Sección", "Herramientas", "Sonido", "Vista", "Ayuda"];
+    const sections = ["Archivo", "Editar", "Pista", "Compás", "Nota", "Sección", "Dúo", "Herramientas", "Sonido", "Vista", "Ayuda"];
     body.append(h("div", { class: "menu-tabs" }, sections.map((s) => h("button", { "aria-pressed": s === section, onclick: () => this.menu(s) }, s))));
     const item = (label: string, sub: string, fn: () => void) => h("button", { onclick: () => fn() }, label, sub ? h("small", null, sub) : null);
     const close = (fn: () => void) => () => { this.close(); fn(); };
@@ -405,6 +430,12 @@ export class Sheets {
           const letter = String.fromCharCode(65 + ed.score.masterBars.filter((m, i) => m.section && i < ed.cursor.b).length);
           ed.barProp("section", `${letter}|${n}`);
         }))),
+      ],
+      Dúo: [
+        item("Compartir con tu dúo", "Enlace para editar juntos", () => this.share()),
+        item("Comentarios", `${ed.comments.filter((c) => !c.done).length} pendientes · en el compás ${ed.cursor.b + 1}`, () => this.commentsSheet()),
+        item(ed.proposal ? "Tu propuesta" : "Propuestas", ed.proposal ? `${ed.proposalSize} cambios sin enviar` : `${ed.proposals.length} pendientes · proponer cambios`, () => this.proposalsSheet()),
+        item("Versiones", "Historial en este dispositivo y en la nube", () => this.versionsSheet()),
       ],
       Herramientas: [
         item("Biblioteca de acordes", "Diagramas e inserción", () => this.chords()),
@@ -470,15 +501,59 @@ export class Sheets {
     const mine = h("div", { class: "trlist" }, h("p", { class: "note" }, "Cargando…"));
     const local = h("div", { class: "trlist" });
     const samples = h("div", { class: "trlist" });
-    const row = (title: string, sub: string, open: () => void, del?: () => Promise<void> | void, extra?: HTMLElement | null) => {
+    // Búsqueda, carpetas y etiquetas: cada fila registra su canción para poder filtrarla.
+    const items: { el: HTMLElement; title: string; meta: () => LibMeta }[] = [];
+    let q = "", folderSel: string | null = null; // null = todas, "" = sin carpeta
+    const tagSel = new Set<string>();
+    const filters = h("div", { class: "libfilters" });
+    const search = h("input", { type: "search", placeholder: "Buscar por título, carpeta o etiqueta", "aria-label": "Buscar canciones" });
+    search.oninput = () => { q = search.value.trim().toLowerCase(); applyFilter(); };
+    const applyFilter = () => {
+      for (const it of items) {
+        const m = it.meta(), hay = `${it.title} ${m.folder ?? ""} ${(m.tags ?? []).join(" ")}`.toLowerCase();
+        it.el.hidden = !(!q || hay.includes(q)) || (folderSel !== null && (m.folder ?? "") !== folderSel) || [...tagSel].some((t) => !(m.tags ?? []).includes(t));
+      }
+    };
+    const drawFilters = () => {
+      const folders = [...new Set(items.map((x) => x.meta().folder).filter(Boolean) as string[])].sort();
+      const tags = [...new Set(items.flatMap((x) => x.meta().tags ?? []))].sort();
+      const chip = (label: string, on: boolean, fn: () => void) => h("button", { class: "sbtn", "aria-pressed": on, onclick: () => { fn(); drawFilters(); applyFilter(); } }, label);
+      filters.replaceChildren(
+        ...(folders.length ? [h("div", { class: "chips", role: "group", "aria-label": "Carpetas" }, chip("Todas", folderSel === null, () => (folderSel = null)),
+          ...folders.map((f) => chip(`📁 ${f}`, folderSel === f, () => (folderSel = folderSel === f ? null : f))), chip("Sin carpeta", folderSel === "", () => (folderSel = folderSel === "" ? null : "")))] : []),
+        ...(tags.length ? [h("div", { class: "chips", role: "group", "aria-label": "Etiquetas" }, ...tags.map((t) => chip(`#${t}`, tagSel.has(t), () => (tagSel.has(t) ? tagSel.delete(t) : tagSel.add(t)))))] : []));
+    };
+    const metaText = (m: LibMeta) => [m.folder ? `📁 ${m.folder}` : "", ...(m.tags ?? []).map((t) => `#${t}`)].filter(Boolean).join(" ");
+    /** Carpeta y etiquetas de una canción (en el dispositivo y, si es de la nube, también allá). */
+    const organize = (id: string, title: string, cloudId: string | null, sub: HTMLElement, base: string) => {
+      const m = libMeta(id);
+      const folderIn = h("input", { type: "text", value: m.folder ?? "", placeholder: "Carpeta (ej. Corridos, Ensayo)", "aria-label": `Carpeta de ${title}`, list: "mf-folders" });
+      const tagsIn = h("input", { type: "text", value: (m.tags ?? []).join(", "), placeholder: "Etiquetas separadas por coma", "aria-label": `Etiquetas de ${title}` });
+      const box = h("form", { class: "orgbox", onsubmit: async (e: Event) => {
+        e.preventDefault();
+        const clean = setLibMeta(id, { folder: folderIn.value, tags: parseTags(tagsIn.value) });
+        if (cloudId) await cloud.organize(cloudId, clean.folder ?? null, clean.tags ?? []);
+        sub.textContent = [base, metaText(clean)].filter(Boolean).join(" · ");
+        box.remove(); drawFilters(); applyFilter();
+      } }, folderIn, tagsIn, h("button", { class: "primary" }, "Guardar"));
+      return box;
+    };
+    const row = (title: string, sub: string, open: () => void, del?: () => Promise<void> | void, extra?: HTMLElement | null, org?: { id: string; cloudId?: string }) => {
       const delBtn = del ? h("button", { class: "ibtn", "aria-label": `Borrar ${title}` }, icon("trash", 18)) : null;
       if (delBtn && del) delBtn.onclick = async () => {
         if (!delBtn.dataset.armed) { delBtn.dataset.armed = "1"; delBtn.style.background = "#e5484d"; this.c.toast("Toca otra vez para borrarla."); setTimeout(() => { delete delBtn.dataset.armed; delBtn.style.background = ""; }, 3000); return; }
         try { await del(); this.library(); } catch (e) { this.c.toast((e as Error).message, true); }
       };
-      return h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
-        h("button", { class: "listbtn", onclick: open }, title, h("small", null, sub)),
-        h("span", { class: "acts" }, extra ?? null, delBtn));
+      const subEl = h("small", null, [sub, org ? metaText(libMeta(org.id)) : ""].filter(Boolean).join(" · "));
+      const orgBtn = org ? h("button", { class: "ibtn", "aria-label": `Carpeta y etiquetas de ${title}`, title: "Carpeta y etiquetas" }, "🏷") : null;
+      const el = h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
+        h("button", { class: "listbtn", onclick: open }, title, subEl),
+        h("span", { class: "acts" }, orgBtn, extra ?? null, delBtn));
+      if (org && orgBtn) {
+        orgBtn.onclick = () => { const open2 = el.querySelector(".orgbox"); if (open2) { open2.remove(); return; } el.append(organize(org.id, title, org.cloudId ?? null, subEl, sub)); };
+        items.push({ el, title, meta: () => libMeta(org.id) });
+      }
+      return el;
     };
     const when = (t: number | string) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
     const openId = (id: string) => () => { this.close(); this.c.openSong(id); };
@@ -535,7 +610,7 @@ export class Sheets {
         await this.c.addSong(fromJson(json));
         forgetSong(e.id);
         this.c.toast("Se subió a tu biblioteca.");
-      } }, icon("up", 18)) : null))
+      } }, icon("up", 18)) : null, { id: e.id }))
       : [h("p", { class: "note" }, "Nada guardado solo en este dispositivo.")]));
     if (cloud.session && !claudeLib && onDevice.length > 1) local.append(h("button", { class: "ghost", onclick: async (ev: Event) => {
       const b = ev.currentTarget as HTMLButtonElement; b.disabled = true;
@@ -551,7 +626,8 @@ export class Sheets {
       this.library();
     } }, `Subir las ${onDevice.length} a mi biblioteca`));
 
-    this.open("Biblioteca", "full", account, actions,
+    const folderList = h("datalist", { id: "mf-folders" });
+    this.open("Biblioteca", "full", account, actions, search, filters, folderList,
       h("div", { class: "sec" }, h("h3", null, claudeLib ? "Mis canciones" : cloud.session ? "Mis canciones (en la nube)" : "Mis canciones"), mine),
       h("div", { class: "sec" }, h("h3", null, "Solo en este dispositivo"), local),
       h("div", { class: "sec" }, h("h3", null, "Pistas de muestra"), samples),
@@ -566,11 +642,13 @@ export class Sheets {
         const ok = await claudeLib.ready;
         const list = ok ? await claudeLib.list() : [];
         mine.replaceChildren(...(!ok ? [h("p", { class: "note" }, "Inicia sesión en Claude para guardar tu biblioteca. Mientras, todo queda en este navegador.")]
-          : list.length ? list.map((x) => row(x.title, `${when(x.updated)}${`claude-${x.id}` === this.c.songId ? " · abierta" : ""}`, openId(`claude-${x.id}`), binned(x.id, x.title, () => claudeLib.remove(x.id), "claude")))
+          : list.length ? list.map((x) => row(x.title, `${when(x.updated)}${`claude-${x.id}` === this.c.songId ? " · abierta" : ""}`, openId(`claude-${x.id}`), binned(x.id, x.title, () => claudeLib.remove(x.id), "claude"), null, { id: `claude-${x.id}` }))
           : [h("p", { class: "note" }, "Todavía no hay canciones. Crea una, importa un archivo o abre una muestra.")]));
       } else if (cloud.session) {
         const list = await cloud.mySongs();
-        mine.replaceChildren(...(list.length ? list.map((x) => row(x.title, `${when(x.updated_at)}${x.id === this.c.songId ? " · abierta" : ""}`, openId(x.id), binned(x.id, x.title, () => cloud.deleteMine(x.id), "cloud")))
+        // Lo que dice la nube manda (así se ve igual en todos tus dispositivos).
+        for (const x of list) if (x.tags !== undefined) setLibMeta(x.id, { folder: x.folder ?? null, tags: x.tags ?? [] });
+        mine.replaceChildren(...(list.length ? list.map((x) => row(x.title, `${when(x.updated_at)}${x.id === this.c.songId ? " · abierta" : ""}`, openId(x.id), binned(x.id, x.title, () => cloud.deleteMine(x.id), "cloud"), null, { id: x.id, cloudId: x.id }))
           : [h("p", { class: "note" }, "Todavía no hay canciones. Crea una, importa un archivo o abre una muestra.")]));
         if (this.c.isCloud && this.c.songId && !list.some((x) => x.id === this.c.songId))
           mine.append(h("button", { class: "ghost", onclick: async () => { try { await cloud.claim(this.c.songId!); this.c.toast("La canción abierta quedó en tu biblioteca."); this.library(); } catch (e) { this.c.toast((e as Error).message, true); } } }, "Guardar la canción abierta en mi biblioteca"));
@@ -580,6 +658,8 @@ export class Sheets {
           : [h("p", { class: "note" }, "Entra con tu cuenta para ver las canciones guardadas en la nube.")]));
       }
     } catch (e) { mine.replaceChildren(h("p", { class: "note" }, (e as Error).message)); }
+    folderList.replaceChildren(...[...new Set(items.map((x) => x.meta().folder).filter(Boolean) as string[])].map((f) => h("option", { value: f })));
+    drawFilters(); applyFilter();
   }
 
   /** Pantalla de acceso. `gate` la deja sin botón de cerrar (al arrancar). */
@@ -667,29 +747,46 @@ export class Sheets {
 
   // ---------- versiones ----------
   async versionsSheet() {
-    const { ed } = this.c, id = this.c.songId;
+    const { ed, cloud } = this.c, id = this.c.songId;
     if (!id) return;
     const list = h("div", { class: "trlist" }, h("p", { class: "note" }, "Cargando…"));
     const name = h("input", { type: "text", placeholder: "Nombre (por ejemplo: antes del solo)", "aria-label": "Nombre de la versión" });
     const fmt = (t: number) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
+    const inCloud = this.c.isCloud && !!cloud.session;
     const draw = async () => {
-      const vs = await versions(id).catch(() => []);
-      list.replaceChildren(...(vs.length ? vs.map((v) => {
+      // Las de este dispositivo y las de la nube, juntas y de la más nueva a la más vieja.
+      const [loc, rem] = await Promise.all([versions(id).catch(() => []), inCloud ? cloud.cloudVersions(id).catch(() => []) : Promise.resolve([])]);
+      type V = { key: string; t: number; label: string; auto: boolean; size: number; where: "aquí" | "nube"; json: () => Promise<string | null>; del: () => Promise<unknown> };
+      const all: V[] = [
+        ...loc.map((v): V => ({ key: v.id, t: v.t, label: v.label, auto: v.auto, size: v.json.length, where: "aquí", json: async () => v.json, del: () => deleteVersion(v.id) })),
+        ...rem.map((v): V => ({ key: v.id, t: Date.parse(v.created_at), label: v.label, auto: v.auto, size: v.size, where: "nube", json: () => cloud.cloudVersionData(v.id), del: () => cloud.deleteCloudVersion(v.id) })),
+      ].sort((x, y) => y.t - x.t);
+      list.replaceChildren(...(all.length ? all.map((v) => {
         const restore = h("button", { class: "ghost", onclick: async () => {
-          ed.commit([{ k: "load", json: v.json }]); // se puede deshacer
+          const json = await v.json();
+          if (!json) { this.c.toast("No pude traer esa versión.", true); return; }
+          ed.commit([{ k: "load", json }]); // se puede deshacer
           this.close();
           this.c.toast(`Volviste a la versión del ${fmt(v.t)}. Deshacer la quita.`);
         } }, "Restaurar");
-        const del = h("button", { class: "ibtn", "aria-label": "Borrar versión", onclick: async () => { await deleteVersion(v.id); draw(); } }, icon("trash", 18));
+        const del = h("button", { class: "ibtn", "aria-label": "Borrar versión", onclick: async () => { await v.del(); draw(); } }, icon("trash", 18));
         return h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
-          h("div", { class: "nm" }, h("b", null, v.label || (v.auto ? "Automática" : "Versión")), h("small", null, `${fmt(v.t)} · ${Math.round(v.json.length / 1024)} KB`)),
+          h("div", { class: "nm" }, h("b", null, v.label || (v.auto ? "Automática" : "Versión")), h("small", null, `${fmt(v.t)} · ${Math.round(v.size / 1024)} KB · ${v.where === "nube" ? "☁ en la nube" : "en este dispositivo"}`)),
           h("span", { class: "acts" }, restore, del));
       }) : [h("p", { class: "note" }, "Todavía no hay versiones. Se toma una sola cada 10 minutos de edición, o guarda una ahora.")]));
     };
     this.open("Versiones", "full",
-      h("form", { class: "inline", onsubmit: async (e: Event) => { e.preventDefault(); await addVersion(id, ed.score.title || "Sin título", ed.json(), name.value.trim() || "Guardada a mano"); name.value = ""; this.c.toast("Versión guardada."); draw(); } },
-        name, h("button", { class: "primary" }, "Guardar versión")),
-      h("p", { class: "note" }, "Las versiones se guardan en este dispositivo: las 20 automáticas más recientes y todas las que nombres."),
+      h("form", { class: "inline", onsubmit: async (e: Event) => {
+        e.preventDefault();
+        const label = name.value.trim() || "Guardada a mano", json = ed.json(), title = ed.score.title || "Sin título";
+        await addVersion(id, title, json, label);
+        const up = inCloud ? await cloud.pushVersion(id, title, json, label, false) : false;
+        name.value = ""; this.c.toast(up ? "Versión guardada aquí y en la nube." : "Versión guardada."); draw();
+      } }, name, h("button", { class: "primary" }, "Guardar versión")),
+      h("p", { class: "note" }, inCloud
+        ? (cloud.has004 === false ? "En este dispositivo: las 20 automáticas más recientes y todas las que nombres. Para guardarlas también en la nube falta aplicar la migración 004 en Supabase."
+          : "Las versiones con nombre se guardan aquí y en la nube; de las automáticas, una por hora sube a la nube (las 20 más recientes).")
+        : "Las versiones se guardan en este dispositivo: las 20 automáticas más recientes y todas las que nombres. Con tu cuenta también se guardan en la nube."),
       list);
     draw();
   }
@@ -735,6 +832,61 @@ export class Sheets {
       h("div", { class: "menu-grid" }, STRUMS.map((p) => h("button", { onclick: () => { this.close(); this.c.toast(ed.strum(p)); } }, p.name, h("small", { class: "mono" }, `${p.ts}  ${show(p.grid)}`)))));
   }
 
+  // ---------- comentarios por compás ----------
+  commentsSheet(focusBar?: number) {
+    const { ed } = this.c;
+    const bar = focusBar ?? ed.cursor.b;
+    const fmt = (t: number) => new Date(t).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
+    let showDone = false;
+    const list = h("div", { class: "trlist" });
+    const draw = () => {
+      const all = ed.comments.filter((c) => showDone || !c.done);
+      list.replaceChildren(...(all.length ? all.map((c) => h("div", { class: `tr cm${c.b === bar ? " on" : ""}${c.done ? " done" : ""}`, style: "grid-template-columns:1fr auto" },
+        h("button", { class: "listbtn", onclick: () => { ed.gotoBar(c.b); this.close(); } }, `Compás ${c.b + 1}: ${c.text}`, h("small", null, `${c.by} · ${fmt(c.at)}${c.done ? " · resuelto" : ""}`)),
+        h("span", { class: "acts" },
+          h("button", { class: "ibtn", "aria-label": c.done ? "Marcar pendiente" : "Marcar resuelto", title: c.done ? "Marcar pendiente" : "Marcar resuelto", onclick: () => { ed.setCommentDone(c, !c.done); draw(); } }, c.done ? "↺" : "✓"),
+          h("button", { class: "ibtn", "aria-label": "Borrar comentario", onclick: () => { ed.deleteComment(c.id); draw(); } }, icon("trash", 18)))))
+        : [h("p", { class: "note" }, "Sin comentarios. Escribe uno para el compás donde estás: tu dúo lo ve al instante.")]));
+    };
+    const text = h("textarea", { rows: 2, placeholder: `Comentario para el compás ${bar + 1} (ej. «aquí entra la segunda voz»)`, "aria-label": `Comentario para el compás ${bar + 1}`, maxlength: 500 });
+    const doneToggle = h("label", { class: "inline" }, h("input", { type: "checkbox", onchange: (e: Event) => { showDone = (e.target as HTMLInputElement).checked; draw(); } }), "Ver también los resueltos");
+    this.open("Comentarios", "full",
+      h("form", { class: "sec", onsubmit: (e: Event) => { e.preventDefault(); ed.addComment(bar, text.value, this.c.who()); text.value = ""; draw(); this.c.toast("Comentario agregado."); } },
+        text, h("div", { class: "inline" }, h("button", { class: "primary" }, `Comentar el compás ${bar + 1}`), h("small", { class: "note" }, `Firmas como ${this.c.who()}`))),
+      doneToggle, list);
+    draw();
+  }
+
+  // ---------- propuestas ----------
+  proposalsSheet() {
+    const { ed } = this.c;
+    const fmt = (t: number) => new Date(t).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
+    if (ed.proposal) {
+      const title = h("input", { type: "text", placeholder: "Qué propones (ej. «otro final para el coro»)", "aria-label": "Título de la propuesta", maxlength: 80 });
+      this.open("Tu propuesta", "full",
+        h("p", { class: "note" }, `Llevas ${ed.proposalSize} cambio${ed.proposalSize === 1 ? "" : "s"}. Mientras propones, nada se guarda ni le llega al dúo: al enviarla, la canción vuelve a como estaba y tu propuesta queda en la lista para que la apliquen o la rechacen.`),
+        h("form", { class: "inline", onsubmit: (e: Event) => { e.preventDefault(); this.close(); this.c.toast(ed.sendProposal(title.value, this.c.who())); } }, title, h("button", { class: "primary" }, "Enviar propuesta")),
+        h("div", { class: "inline" }, h("button", { class: "ghost", onclick: () => this.close() }, "Seguir editando"),
+          h("button", { class: "ghost danger", onclick: () => { ed.discardProposal(); this.close(); this.c.toast("Propuesta descartada: la canción quedó como estaba."); } }, "Descartar")));
+      return;
+    }
+    const list = h("div", { class: "trlist" });
+    const draw = () => {
+      const all = ed.proposals;
+      list.replaceChildren(...(all.length ? all.map((p) => h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
+        h("div", { class: "nm" }, h("b", null, p.title), h("small", null, `${p.by} · ${fmt(p.at)} · ${p.ops.length} cambio${p.ops.length === 1 ? "" : "s"}`)),
+        h("span", { class: "acts" },
+          h("button", { class: "primary", onclick: () => { this.close(); this.c.toast(ed.acceptProposal(p.id)); } }, "Aplicar"),
+          h("button", { class: "ghost", onclick: () => { ed.rejectProposal(p.id); draw(); this.c.toast("Propuesta rechazada."); } }, "Rechazar"))))
+        : [h("p", { class: "note" }, "No hay propuestas pendientes.")]));
+    };
+    this.open("Propuestas", "full",
+      h("p", { class: "note" }, "Una propuesta es una idea de cambio que no toca la canción hasta que alguien la aplica: ideal para sugerir otro solo, otro ritmo o un arreglo sin borrar lo de tu dúo."),
+      h("button", { class: "primary", onclick: () => { ed.startProposal(); this.close(); this.c.toast("Modo propuesta: edita libremente; envíala desde la barra azul de arriba."); } }, "Proponer cambios"),
+      h("div", { class: "sec" }, h("h3", null, "Pendientes"), list));
+    draw();
+  }
+
   // ---------- obra completa ----------
   /** Secciones de la canción: ir, repetir en bucle, seleccionar, duplicar, mover, renombrar, borrar. */
   sectionsSheet() {
@@ -765,6 +917,7 @@ export class Sheets {
             }, looping ? "primary" : "ghost"),
             btn("Seleccionar", `Seleccionar ${x.name} en todas las pistas`, () => { ed.selectSection(k); this.close(); this.c.toast(`«${x.name}» seleccionada: copia, transpón o aplica técnicas.`); }),
             btn("Duplicar", `Duplicar ${x.name}`, () => say(ed.dupSection(k))),
+            btn("Exportar", `Exportar solo ${x.name}`, () => this.exportDialog({ scope: "range", range: { s: x.b, e: x.e, name: x.name } })),
             btn("↑", `Mover ${x.name} antes`, () => say(ed.moveSection(k, -1))),
             btn("↓", `Mover ${x.name} después`, () => say(ed.moveSection(k, 1))),
             name, del));
@@ -869,9 +1022,25 @@ export class Sheets {
     this.open("Importar archivo", "full", input,
       h("p", { class: "note" }, "Se agrega a tu biblioteca como canción nueva y se abre. Formatos: Guitar Pro 3 a 8 (.gp3 .gp4 .gp5 .gpx .gp), MusicXML y alphaTex."));
   }
-  exportDialog() {
+  /** Exportar: toda la canción, solo una pista o solo unos compases (la selección o una sección). */
+  exportDialog(preset?: { scope: "song" | "track" | "range"; range?: { s: number; e: number; name?: string } }) {
     const { ed, engine } = this.c;
     let type = "mp3";
+    // Qué parte: el rango por omisión es la selección o la sección donde está el cursor.
+    const selR = ed.sel ? (() => { const o = ordered(ed.sel!); return { s: o.s.b, e: o.e.b, name: "" }; })() : null;
+    const secR = (() => { const x = ed.sections.find((q) => ed.cursor.b >= q.b && ed.cursor.b <= q.e); return x ? { s: x.b, e: x.e, name: x.name } : null; })();
+    const range = preset?.range ? { name: "", ...preset.range } : selR ?? secR ?? { s: ed.cursor.b, e: ed.cursor.b, name: "" };
+    let scope: "song" | "track" | "range" = preset?.scope ?? "song";
+    const rangeText = `Compases ${range.s + 1}${range.e > range.s ? `–${range.e + 1}` : ""}${range.name ? ` (${range.name})` : ""}`;
+    const scopes = h("div", { class: "menu-tabs", role: "group", "aria-label": "Qué exportar" });
+    const drawScopes = () => scopes.replaceChildren(...([["song", "Toda la canción"], ["track", `Solo ${ed.track.name}`], ["range", rangeText]] as [typeof scope, string][])
+      .map(([v, l]) => h("button", { "aria-pressed": v === scope, onclick: () => { scope = v; drawScopes(); draw(); } }, l)));
+    const target = () => {
+      if (scope === "song") return ed.score;
+      const sub = scope === "track" ? subScore(ed.score, { tracks: [ed.cursor.t] }) : subScore(ed.score, { bars: range });
+      sub.title = `${ed.score.title || "Sin título"} - ${scope === "track" ? ed.track.name : range.name || rangeText}`;
+      return sub;
+    };
     const prog = h("div", { class: "progress" });
     const metro = h("input", { type: "checkbox", id: "ex-m" });
     const per = h("input", { type: "checkbox", id: "ex-p" });
@@ -889,17 +1058,19 @@ export class Sheets {
     const draw = () => {
       types.replaceChildren(...TYPES.map(([v, l]) => h("button", { "aria-pressed": v === type, onclick: () => { type = v; prog.textContent = ""; draw(); } }, l)));
       go.textContent = `Exportar ${label()}`;
-      rowAll.hidden = type !== "pdf";
-      rowPer.hidden = rowMetro.hidden = rowStudio.hidden = !audioOnly();
+      rowAll.hidden = type !== "pdf" || scope !== "song";
+      rowPer.hidden = !audioOnly() || scope === "track";
+      rowMetro.hidden = rowStudio.hidden = !audioOnly();
       rowQ.hidden = type !== "mp3";
     };
     go.onclick = async () => {
       go.disabled = true;
       try {
-        if (type === "gp") await exportGp(ed.score);
-        else if (type === "midi") await exportMidi(ed.score);
-        else if (type === "pdf") await exportPdf(ed.score, all.checked ? ed.score.tracks.map((t) => t.index) : [ed.cursor.t], (m) => (prog.textContent = m));
-        else await exportAudio(engine.api, ed.score, type as "mp3" | "wav", { metronome: metro.checked, perTrack: per.checked, quality: Number(quality.value), soundFont: () => engine.soundFontBytes(), studio: studio.checked }, (m) => (prog.textContent = m));
+        const sc = target();
+        if (type === "gp") await exportGp(sc);
+        else if (type === "midi") await exportMidi(sc);
+        else if (type === "pdf") await exportPdf(sc, scope !== "song" || all.checked ? sc.tracks.map((t) => t.index) : [ed.cursor.t], (m) => (prog.textContent = m));
+        else await exportAudio(engine.api, sc, type as "mp3" | "wav", { metronome: metro.checked, perTrack: per.checked, quality: Number(quality.value), soundFont: () => engine.soundFontBytes(), studio: studio.checked }, (m) => (prog.textContent = m));
         prog.textContent = `Listo: ${label()}. Revisa tus descargas.`;
       } catch (e) { prog.textContent = `No se pudo exportar: ${(e as Error).message}`; }
       go.disabled = false;
@@ -910,7 +1081,8 @@ export class Sheets {
     const rowStudio = h("label", { class: "inline", for: "ex-s" }, studio, "Con efectos y masterizado (tarda más: procesa pista por pista)");
     const rowQ = h("div", { class: "field" }, h("label", null, "Calidad MP3"), quality);
     draw();
-    this.open("Exportar", "full", h("div", { class: "sec" }, h("h3", null, "Tipo de archivo"), types),
+    drawScopes();
+    this.open("Exportar", "full", h("div", { class: "sec" }, h("h3", null, "Qué exportar"), scopes), h("div", { class: "sec" }, h("h3", null, "Tipo de archivo"), types),
       h("div", { class: "sec" }, h("h3", null, "Ajustes"), rowAll, rowStudio, rowPer, rowMetro, rowQ),
       h("div", { class: "inline" }, go, h("button", { class: "ghost", onclick: () => this.close() }, "Cancelar")), prog,
       h("p", { class: "note" }, `El audio se genera en el teléfono con el banco ${this.c.bank.name}; una canción de 3 minutos puede tardar un rato.`));
