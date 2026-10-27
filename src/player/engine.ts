@@ -21,7 +21,8 @@ export const setKitScore = (s: at.model.Score | null) => { kitScore = s; };
 /** Un tiempo del metrónomo: segundos desde el inicio, si es el primero del compás y cuántos tiene el compás. */
 export interface Beat { t: number; down: boolean; num: number }
 /** Convierte el orden de compases de alphaTab (con repeticiones) en tiempos reales usando los cambios de tempo del MIDI. */
-export function beatTimes(mf: at.midi.MidiFile, bars: { start: number; end: number; masterBar: at.model.MasterBar }[]): Beat[] {
+/** Convierte ticks de la canción en segundos con los cambios de tempo del MIDI (incluye el corrimiento de alphaTab). */
+export function tickToSeconds(mf: at.midi.MidiFile): (tick: number) => number {
   const ppq = 960;
   const tempos: { tick: number; bpm: number }[] = [];
   for (const tr of mf.tracks) for (const e of tr.events) {
@@ -33,18 +34,23 @@ export function beatTimes(mf: at.midi.MidiFile, bars: { start: number; end: numb
   // Segundos acumulados al inicio de cada tramo de tempo.
   const acc: number[] = [0];
   for (let i = 1; i < tempos.length; i++) acc.push(acc[i - 1] + ((tempos[i].tick - tempos[i - 1].tick) / ppq) * (60 / tempos[i - 1].bpm));
+  // alphaTab corre todos los eventos del MIDI unos ticks (tickShift); los ticks de la partitura no.
+  const shift = (mf as unknown as { tickShift?: number }).tickShift ?? 0;
   let j = 0;
-  const toSec = (tick: number) => {
+  return (scoreTick: number) => {
+    const tick = scoreTick + shift;
     while (j + 1 < tempos.length && tempos[j + 1].tick <= tick) j++;
     while (j > 0 && tempos[j].tick > tick) j--;
     return acc[j] + ((tick - tempos[j].tick) / ppq) * (60 / tempos[j].bpm);
   };
+}
+/** Convierte el orden de compases de alphaTab (con repeticiones) en tiempos reales usando los cambios de tempo del MIDI. */
+export function beatTimes(mf: at.midi.MidiFile, bars: { start: number; end: number; masterBar: at.model.MasterBar }[]): Beat[] {
+  const ppq = 960, toSec = tickToSeconds(mf);
   const out: Beat[] = [];
-  // alphaTab corre todos los eventos del MIDI unos ticks (tickShift); los compases de la búsqueda no.
-  const shift = (mf as unknown as { tickShift?: number }).tickShift ?? 0;
   for (const b of bars) {
     const num = b.masterBar.timeSignatureNumerator, step = (ppq * 4) / b.masterBar.timeSignatureDenominator;
-    for (let k = 0; k < num; k++) { const tick = b.start + k * step; if (tick < b.end) out.push({ t: toSec(tick + shift), down: k === 0, num }); }
+    for (let k = 0; k < num; k++) { const tick = b.start + k * step; if (tick < b.end) out.push({ t: toSec(tick), down: k === 0, num }); }
   }
   return out;
 }
@@ -110,7 +116,7 @@ export class Engine {
     }
     // Con efectos, el MIDI que genera alphaTab es el que toca el otro motor.
     // (alphaTab usa curvas de bend de MIDI 2.0; para el otro motor se genera un MIDI estándar con los mismos tiempos.)
-    this.api.midiLoad.on(() => { if (this.fx) { const m = this.smf1(); this.fx.loadSong(m.midi, this.fxTracks(), m.beats); this.reseek(); this.fx.setMaster(masterOf(this.api.score!)); } });
+    this.api.midiLoad.on(() => { if (this.fx) { const m = this.smf1(); this.fx.loadSong(m.midi, this.fxTracks(), m.beats); this.reseek(); this.fx.seek(this.toSec!(this.lastTick) * 1000); this.fx.setMaster(masterOf(this.api.score!)); } });
     this.api.playerReady.on(() => {
       this.soundReady = true;
       this.emit("ready");
@@ -150,10 +156,13 @@ export class Engine {
   // ---------- motor con efectos ----------
   /** MIDI estándar (SMF 1) de la canción, con los mismos tiempos que el que usa alphaTab. */
   /** MIDI estándar y los tiempos del metrónomo (en segundos, en orden de reproducción con repeticiones). */
+  /** Ticks → segundos de la canción cargada en el motor de estudio. */
+  private toSec: ((tick: number) => number) | null = null;
   private smf1(): { midi: Uint8Array; beats: Beat[] } {
     const mf = new at.midi.MidiFile();
     const gen = new at.midi.MidiFileGenerator(this.api.score!, this.api.settings, new at.midi.AlphaSynthMidiFileHandler(mf, true));
     gen.generate();
+    this.toSec = tickToSeconds(mf);
     return { midi: mf.toBinary(), beats: beatTimes(mf, gen.tickLookup.masterBars) };
   }
   /** Activa los efectos: `soundFont` es el banco original (sin adaptar). */
@@ -179,7 +188,12 @@ export class Engine {
       get backingTrackDuration() { return fx.durationMs; },
       get playbackRate() { return rate; }, set playbackRate(v: number) { rate = v; fx.rate = v; },
       get masterVolume() { return vol; }, set masterVolume(v: number) { vol = v; fx.volume = v; },
-      seekTo: (ms: number) => { fx.seek(ms); output()?.output?.updatePosition(ms); },
+      seekTo: (ms: number) => {
+        // Al recargar el MIDI, alphaTab manda al reproductor a 0 por su cuenta (incluso después de
+        // arrancar): se ignora mientras dura la recarga; la posición buena ya la puso reseek.
+        if (this.reloading && ms < 5) { output()?.output?.updatePosition(fx.timeMs); return; }
+        fx.seek(ms); output()?.output?.updatePosition(ms);
+      },
       play: () => { void fx.play().then(() => { cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(tick); }); },
       pause: () => { fx.pause(); cancelAnimationFrame(this.raf); output()?.output?.updatePosition(fx.timeMs); },
     };
@@ -226,14 +240,22 @@ export class Engine {
   get bounds() {
     return this.api.boundsLookup;
   }
+  /** Si hay un play esperando a que el MIDI recargue, otro toque lo cancela (no arranca después solo). */
+  private pendingPlay: (() => void) | null = null;
+  private reloading = false;
+  private reloadT = 0;
   playPause() {
+    if (this.pendingPlay) { this.pendingPlay(); return; }
     if (this.playing || !this.midiDirty) { this.api.playPause(); return; }
     this.midiDirty = false;
     // Espera a que el reproductor tenga el MIDI nuevo. El aviso puede llegar al registrarse (estado
     // anterior): solo cuenta después de pedir la recarga.
     let armed = false, done = false, t = 0;
     let off: (() => void) | null = null;
-    const go = () => { if (!armed || done) return; done = true; off?.(); clearTimeout(t); this.reseek(); this.api.play(); };
+    const finish = () => { done = true; off?.(); clearTimeout(t); this.pendingPlay = null; clearTimeout(this.reloadT); this.reloadT = window.setTimeout(() => { this.reloading = false; }, 600); };
+    const go = () => { if (!armed || done) return; finish(); this.reseek(); if (this.fx && this.toSec) this.fx.seek(this.toSec(this.lastTick) * 1000); this.api.play(); };
+    this.reloading = true;
+    this.pendingPlay = finish; // un segundo toque antes de arrancar = cancelar
     off = this.api.playerReady.on(go) as unknown as () => void;
     armed = true;
     t = window.setTimeout(go, 1500);
@@ -258,6 +280,8 @@ export class Engine {
   private reseek() { try { this.api.tickPosition = this.lastTick; } catch { /* sin reproductor */ } }
   seekBeat(beat: at.model.Beat) {
     this.lastTick = beat.absolutePlaybackStart;
+    // Con el motor de estudio se le avisa directo: mientras alphaTab recarga, ignora la búsqueda.
+    if (this.fx && this.toSec) this.fx.seek(this.toSec(this.lastTick) * 1000);
     try {
       this.api.tickPosition = beat.absolutePlaybackStart;
     } catch { /* aún sin reproductor */ }

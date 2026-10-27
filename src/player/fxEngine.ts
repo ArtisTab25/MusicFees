@@ -186,9 +186,14 @@ export class FxEngine {
     this.sleepT = window.setTimeout(() => { if (this.seq?.paused && !this.counting && this.native.state === "running") void this.native.suspend(); }, ms);
   }
   private wake() { clearTimeout(this.sleepT); return this.ctx.resume(); }
+  /** Cada play y cada pausa cambian este número: un play que todavía esperaba (audio dormido,
+   *  canción cargando o cuenta inicial) y que ya fue pausado no arranca después por su cuenta. */
+  private playId = 0;
   async play() {
+    const id = ++this.playId;
     await this.wake();
     await this.loaded;
+    if (id !== this.playId) return;
     const t0 = this.target;
     // La posición se manda antes de la cuenta inicial: la respuesta del secuenciador llega mientras
     // suenan los clics y no corrige el reloj cuando la canción ya empezó.
@@ -206,6 +211,7 @@ export class FxEngine {
       for (let k = 0; k < num; k++) this.click(start + k * beat, k === 0, 1);
       await new Promise((r) => setTimeout(r, (0.08 + num * beat + frac) * 1000 - 15));
       this.counting = false;
+      if (id !== this.playId) return;
     }
     // Si llegó otra posición durante la cuenta, manda la última.
     const t1 = this.target;
@@ -216,7 +222,12 @@ export class FxEngine {
     this.anchor = { ctx: this.ctx.currentTime + 0.015, song: t1 };
     this.startClicks();
   }
-  pause() { this.target = this.songNow; this.anchor = null; this.seq.pause(); this.stopClicks(); this.sleepSoon(); }
+  pause() {
+    this.playId++;
+    if (!this.counting && this.anchor) this.target = this.songNow;
+    this.counting = false;
+    this.anchor = null; this.seq.pause(); this.stopClicks(); this.sleepSoon();
+  }
   seek(ms: number) {
     this.target = Math.max(0, ms / 1000);
     this.seq.currentTime = this.target;

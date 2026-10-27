@@ -393,7 +393,9 @@ function placeAt(clientX: number, clientY: number, mode: "tap" | "extend" | "sta
     navigator.vibrate?.(15);
     toast("Selección: toca otro tiempo para extenderla.");
   } else ed.setCursor(to, false, mode === "extend" || ed.selecting);
-  if (!engine.playing) engine.seekBeat(beat);
+  // Tocar una nota elige desde dónde suena: en pausa la próxima vez, y si está sonando salta ahí.
+  engine.seekBeat(beat);
+  if (engine.playing) return; // sonando no se abre el teclado (se tapaba la partitura)
   openInput();
 }
 scoreWrap.addEventListener("pointerdown", (e) => {
