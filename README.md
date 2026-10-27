@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.10** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 1.0** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,25 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Versión 1.0 (fases 3, 7, 8 y 9)
+
+- **Zoom con pellizco** en la partitura (Ctrl + rueda en computadora): lo que está bajo los dedos se queda en su lugar. Botón **▶** para desplegar todas las herramientas en el teléfono.
+- **Pistas**: fusionar dos pistas (cada una en su voz), separar voces en pistas, dividir por altura (graves en clave de Fa) y exportar solo una pista.
+- **Exportar una parte**: toda la canción, una pista o unos compases/una sección (Secciones → Exportar).
+- **Biblioteca**: búsqueda, carpetas y etiquetas (🏷 en cada canción).
+- **Comentarios por compás** (💬) que siguen a su compás y se ven como globitos sobre la partitura.
+- **Modo propuesta** (Menú → Dúo → Propuestas): editar sin guardar ni mandar al dúo, enviar la propuesta, y aplicarla o rechazarla.
+- **Versiones en la nube**: las de nombre siempre y una automática por hora (requiere la migración 004).
+- **Accesibilidad**: botones grandes, alto contraste, menos movimiento, foco visible, lo activo marcado también con forma, ventanas con Esc/Tab y atajos de teclado completos (F1).
+- **Lanzamiento**: pantalla de licencias, privacidad y términos (también en `privacidad.html`), «Borrar mi cuenta», entrar con Google dentro del APK y paquete `.aab` para Google Play.
+
+### Pendiente de configurar (una vez)
+
+1. Supabase → SQL Editor: ejecuta `supabase/migrations/004_biblioteca_y_versiones.sql` (carpetas, etiquetas y versiones en la nube; sin ella todo eso funciona solo en el dispositivo).
+2. Supabase → Authentication → URL Configuration → Redirect URLs: agrega `io.github.artistab25.musicfees://auth` (regreso de Google al APK).
+3. Google Play: crea tu llave de subida privada (`keytool -genkeypair -v -keystore upload.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000`) y guárdala en GitHub → Settings → Secrets → Actions como `MF_UPLOAD_KEYSTORE_B64` (el archivo en base64), `MF_UPLOAD_PASSWORD` y `MF_UPLOAD_ALIAS`. Sin ellos, el `.aab` sale firmado con la llave pública del repositorio y sirve solo para probar.
+4. Ficha de Play: política de privacidad `https://artistab25.github.io/MusicFees/privacidad.html`.
 
 ## Novedades 0.10 (fases 4 a 6)
 

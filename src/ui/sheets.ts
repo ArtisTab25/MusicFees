@@ -489,7 +489,9 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 0.10 y licencias", () => this.about()),
+        item("Acerca de MusicFees", "Versión 1.0", () => this.about()),
+        item("Licencias", "Programas y recursos de terceros", () => this.about("licencias")),
+        item("Privacidad y términos", "Qué se guarda y para qué", () => this.about("privacidad")),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -570,10 +572,9 @@ export class Sheets {
       const el = h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
         h("button", { class: "listbtn", onclick: open }, title, subEl),
         h("span", { class: "acts" }, orgBtn, extra ?? null, delBtn));
-      if (org && orgBtn) {
-        orgBtn.onclick = () => { const open2 = el.querySelector(".orgbox"); if (open2) { open2.remove(); return; } el.append(organize(org.id, title, org.cloudId ?? null, subEl, sub)); };
-        items.push({ el, title, meta: () => libMeta(org.id) });
-      }
+      if (org && orgBtn) orgBtn.onclick = () => { const open2 = el.querySelector(".orgbox"); if (open2) { open2.remove(); return; } el.append(organize(org.id, title, org.cloudId ?? null, subEl, sub)); };
+      // Todas las filas se filtran con la búsqueda (las muestras, solo por título).
+      items.push({ el, title: `${title} ${sub}`, meta: () => (org ? libMeta(org.id) : {}) });
       return el;
     };
     const when = (t: number | string) => new Date(t).toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
@@ -597,6 +598,7 @@ export class Sheets {
       h("span", { class: "note", style: "flex:1;min-width:180px" }, who),
       !claudeLib && cloud.session?.isAdmin ? h("button", { class: "ghost", onclick: () => this.users() }, "Cuentas") : null,
       !claudeLib && cloud.session ? h("button", { class: "ghost", onclick: async () => { await cloud.logout(); this.login(); } }, "Cerrar sesión") : null,
+      !claudeLib && cloud.session ? h("button", { class: "ghost danger", onclick: () => this.deleteAccount() }, "Borrar mi cuenta") : null,
       !claudeLib && !cloud.session ? h("button", { class: "primary", onclick: () => this.login() }, "Entrar") : null);
 
     const actions = h("div", { class: "inline" },
@@ -681,6 +683,23 @@ export class Sheets {
     } catch (e) { mine.replaceChildren(h("p", { class: "note" }, (e as Error).message)); }
     folderList.replaceChildren(...[...new Set(items.map((x) => x.meta().folder).filter(Boolean) as string[])].map((f) => h("option", { value: f })));
     drawFilters(); applyFilter();
+  }
+
+  /** Borrar la cuenta propia (pide escribir BORRAR). */
+  deleteAccount() {
+    const { cloud } = this.c;
+    const word = h("input", { type: "text", "aria-label": "Escribe BORRAR para confirmar", placeholder: "BORRAR", autocomplete: "off" });
+    const msg = h("p", { class: "progress", "aria-live": "polite" });
+    this.open("Borrar mi cuenta", "full",
+      h("p", null, `Se borrarán la cuenta ${cloud.session?.email ?? ""}, todas tus canciones de la nube y sus versiones. No se puede deshacer.`),
+      h("p", { class: "note" }, "Antes, si quieres conservar algo, ábrelo y usa Exportar → Guitar Pro. Lo guardado solo en este dispositivo no se toca."),
+      h("form", { class: "inline", onsubmit: async (e: Event) => {
+        e.preventDefault();
+        if (word.value.trim().toUpperCase() !== "BORRAR") { msg.textContent = "Escribe BORRAR para confirmar."; return; }
+        msg.textContent = "Borrando…";
+        try { await cloud.deleteMe(); this.close(); this.c.toast("Tu cuenta y tus canciones de la nube se borraron."); this.login(true); }
+        catch (err) { msg.textContent = (err as Error).message; }
+      } }, word, h("button", { class: "primary danger" }, "Borrar para siempre")), msg);
   }
 
   /** Pantalla de acceso. `gate` la deja sin botón de cerrar (al arrancar). */
@@ -1400,10 +1419,53 @@ export class Sheets {
       h("p", { class: "note" }, "Toca la tablatura sobre la cuerda que quieras y escribe con el teclado de MusicFees que aparece abajo. Si prefieres el teclado del teléfono (o tienes uno físico), todo esto funciona con sus teclas; las letras van en mayúscula o minúscula."),
       h("table", { class: "help-table" }, rows));
   }
-  about() {
-    this.open("Acerca de MusicFees", "full",
-      h("p", null, "MusicFees 0.10 — tablaturas y partituras multipista con edición en dúo."),
-      h("p", { class: "note" }, "Partitura y reproducción: alphaTab (MPL-2.0). Fuente musical: Bravura (SIL OFL). Sonidos: MuseScore General de S. Christian Collins, basado en Fluid R3 de Frank Wen y Michael Cowgill (licencia MIT), y GeneralUser GS de S. Christian Collins (uso libre, también comercial). Motor de estudio: spessasynth_lib (Apache-2.0) y Tone.js (MIT). Nube: Supabase."));
+  about(tab: "acerca" | "licencias" | "privacidad" | "terminos" = "acerca") {
+    const tabs = h("div", { class: "menu-tabs", role: "tablist" }, ([["acerca", "Acerca de"], ["licencias", "Licencias"], ["privacidad", "Privacidad"], ["terminos", "Términos"]] as const)
+      .map(([id, l]) => h("button", { role: "tab", "aria-selected": id === tab, "aria-pressed": id === tab, onclick: () => this.about(id) }, l)));
+    const P = (t: string) => h("p", null, t), N = (t: string) => h("p", { class: "note" }, t);
+    const L: [string, string, string][] = [
+      ["alphaTab 1.8", "Partitura, tablatura y reproducción", "MPL-2.0"],
+      ["Bravura", "Fuente musical (Steinberg)", "SIL Open Font License 1.1"],
+      ["MuseScore General", "Banco de sonidos (S. Christian Collins, basado en Fluid R3)", "MIT"],
+      ["GeneralUser GS", "Banco de sonidos (S. Christian Collins)", "Licencia GeneralUser GS (uso libre, también comercial)"],
+      ["spessasynth_lib", "Sintetizador del motor de estudio", "Apache-2.0"],
+      ["Tone.js", "Efectos del motor de estudio", "MIT"],
+      ["Web Audio Modules SDK", "Plugins de efectos (WAM 2.0)", "MIT"],
+      ["burns-audio-wam", "Plugins distorsión, delay, EQ (Tom Burns)", "MIT"],
+      ["wam-community", "Plugins de la comunidad (Wimmics y otros)", "Varias: GPL/LGPL en algunos efectos de Guitarix y Kapitonov; MIT, CC0 y otras en el resto (ver wam/NOTICE.txt)"],
+      ["Supabase JS", "Cuentas, nube y edición en dúo", "MIT"],
+      ["Capacitor", "App de Android", "MIT"],
+      ["jsPDF y html2canvas", "Exportar PDF", "MIT"],
+      ["lamejs (@breezystack)", "Exportar MP3", "LGPL-3.0"],
+      ["DOMPurify", "Limpieza de texto en PDF", "Apache-2.0 / MPL-2.0"],
+    ];
+    const body: Record<typeof tab, HTMLElement[]> = {
+      acerca: [
+        h("p", null, h("b", null, "MusicFees 1.0"), " — tablaturas y partituras multipista, con edición en dúo, comentarios y propuestas."),
+        P("Hecha en Comalcalco, Tabasco. Gratuita, sin anuncios y sin vender datos."),
+        N("Código: github.com/ArtisTab25/MusicFees · Reportar un problema: github.com/ArtisTab25/MusicFees/issues"),
+      ],
+      licencias: [
+        N("MusicFees usa estos programas y recursos de terceros. Gracias a sus autores."),
+        h("div", { class: "trlist" }, L.map(([n, what, lic]) => h("div", { class: "tr", style: "grid-template-columns:1fr" }, h("div", { class: "nm" }, h("b", null, n), h("small", null, `${what} · ${lic}`))))),
+        N("Los plugins de la comunidad se cargan solo cuando eliges uno; el código fuente de los efectos GPL/LGPL está en su carpeta (.dsp) y en sus proyectos originales."),
+      ],
+      privacidad: [
+        P("Qué guardamos: si creas una cuenta, tu correo y nombre; tus canciones, versiones, carpetas, etiquetas y comentarios. Se guardan en Supabase (servidores en la nube) y en tu dispositivo."),
+        P("Sin cuenta, todo queda solo en tu dispositivo."),
+        P("Para qué: solo para que puedas guardar, abrir y compartir tu música. No hay anuncios, no hay rastreo y no vendemos ni compartimos tus datos."),
+        P("Edición en dúo: quien tenga el enlace de una canción puede verla y editarla. Comparte ese enlace solo con quien quieras."),
+        P("Borrar tus datos: en Biblioteca → «Borrar mi cuenta» se borran tu cuenta, tus canciones de la nube y sus versiones. Lo guardado en el dispositivo se borra al desinstalar la app o limpiar los datos del navegador."),
+        N("Política completa: artistab25.github.io/MusicFees/privacidad.html"),
+      ],
+      terminos: [
+        P("MusicFees es gratuita y se ofrece tal cual, sin garantías. Haz respaldos (Exportar → Guitar Pro) de lo importante."),
+        P("Tu música es tuya: MusicFees no reclama derechos sobre lo que escribes."),
+        P("Respeta los derechos de autor: sube y comparte solo música tuya o que tengas permiso de usar."),
+        P("No uses el servicio para dañar a otros ni para saturarlo. Podemos suspender cuentas que lo hagan."),
+      ],
+    };
+    this.open("Acerca de MusicFees", "full", tabs, ...body[tab]);
   }
 }
 

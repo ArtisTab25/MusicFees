@@ -786,6 +786,13 @@ export async function importScore(score: at.model.Score, name = "") {
 const who = () => cloud.session?.username || PREFS.name || "Músico";
 export const ctx = { who, ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
 const sheets = new Sheets(ctx);
+// Android: el regreso de Google entra a la app por su enlace propio.
+if (Capacitor.isNativePlatform()) void import("@capacitor/app").then(({ App }) => {
+  void App.addListener("appUrlOpen", async ({ url }) => {
+    try { if (await cloud.handleAppUrl(url)) toast("Entraste con Google."); }
+    catch (e) { toast((e as Error).message, true); }
+  });
+});
 // Atajos de la app (teclado de computadora o tableta).
 keys.actions = {
   play: () => playBtn.click(),

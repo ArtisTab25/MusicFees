@@ -1,6 +1,7 @@
 // Guardado en Supabase + sesión en vivo para el dúo (Realtime broadcast y presencia).
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
-import { ARTIFACT, NO_CLOUD_MSG, SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
+import { Capacitor } from "@capacitor/core";
+import { ARTIFACT, NO_CLOUD_MSG, PUBLIC_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import type { Op } from "../score/model";
 
 export interface SongRow { id: string; title: string; data: string; version: number; updated_at: string }
@@ -43,6 +44,8 @@ export interface Session { userId: string; email: string; username: string; isAd
 export interface UserRow { id: string; email: string; name: string; is_admin: boolean; created_at: string; last_sign_in_at: string | null; provider: string }
 
 /** Nube: Supabase Auth (correo y contraseña, o Google) y biblioteca por usuario (003_supabase_auth.sql). */
+/** Enlace con el que Google regresa a la app de Android (debe estar en Supabase → Redirect URLs). */
+export const APP_REDIRECT = "io.github.artistab25.musicfees://auth";
 export class Cloud {
   session: Session | null = null;
   sb: SupabaseClient;
@@ -103,12 +106,31 @@ export class Cloud {
   /** Entrar o crear cuenta con Google: sale a Google y vuelve a la app con la sesión. */
   async loginGoogle() {
     if (ARTIFACT) throw new Error(NO_CLOUD_MSG);
+    if (Capacitor.isNativePlatform()) {
+      // En la app de Android: Google se abre en el navegador del sistema y regresa a la app por su
+      // enlace propio (APP_SCHEME://auth). Ahí se cambia el código por la sesión.
+      const { data, error } = await this.sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: APP_REDIRECT, skipBrowserRedirect: true } });
+      if (error || !data?.url) throw this.explain(error);
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.open({ url: data.url, windowName: "_self" });
+      return;
+    }
     const redirectTo = location.origin + location.pathname;
     const { error } = await this.sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
     if (error) throw this.explain(error);
   }
+  /** La app de Android recibió el regreso de Google (o de «olvidé mi contraseña»). */
+  async handleAppUrl(url: string): Promise<boolean> {
+    if (!url.startsWith(APP_REDIRECT)) return false;
+    const u = new URL(url.replace(/#/, "?"));
+    const code = u.searchParams.get("code"), err = u.searchParams.get("error_description");
+    try { const { Browser } = await import("@capacitor/browser"); await Browser.close(); } catch { /* ya cerrado */ }
+    if (err) throw new Error(err);
+    if (code) { const { error } = await this.sb.auth.exchangeCodeForSession(code); if (error) throw this.explain(error); }
+    return true;
+  }
   async resetPassword(email: string) {
-    const { error } = await this.sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: location.origin + location.pathname });
+    const { error } = await this.sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: Capacitor.isNativePlatform() ? PUBLIC_URL : location.origin + location.pathname });
     if (error) throw this.explain(error);
   }
   async logout() { this.session = null; await this.sb.auth.signOut().catch(() => {}); }
@@ -128,6 +150,8 @@ export class Cloud {
   createUser(email: string, pass: string, name: string, admin = false) { return this.admin<{ id: string }>({ action: "create", email, password: pass, name, admin }); }
   setPassword(id: string, pass: string) { return this.admin<void>({ action: "password", id, password: pass }); }
   deleteUser(id: string) { return this.admin<void>({ action: "delete", id }); }
+  /** Borra la cuenta propia con sus canciones de la nube (no se puede deshacer). */
+  async deleteMe() { await this.admin<void>({ action: "delete-me" }); await this.logout(); }
   // ---------- mi biblioteca ----------
   /** true cuando la base ya tiene carpetas, etiquetas y versiones (migración 004). */
   has004: boolean | null = null;

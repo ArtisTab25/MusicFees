@@ -41,20 +41,42 @@ jobs:
       - name: Compilar APK firmado
         env:
           MF_VERSION_CODE: ${{ github.run_number }}
-          MF_VERSION_NAME: 0.10.${{ github.run_number }}
+          MF_VERSION_NAME: 1.0.${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk ../MusicFees.apk
+      # Paquete para Google Play (.aab). Con los secretos MF_UPLOAD_* se firma con TU llave de subida
+      # (privada); sin ellos se firma con la llave del repositorio y sirve solo para probar.
+      - name: Compilar paquete de Google Play (.aab)
+        env:
+          MF_VERSION_CODE: ${{ github.run_number }}
+          MF_VERSION_NAME: 1.0.${{ github.run_number }}
+          UPLOAD_KEYSTORE_B64: ${{ secrets.MF_UPLOAD_KEYSTORE_B64 }}
+          UPLOAD_PASSWORD: ${{ secrets.MF_UPLOAD_PASSWORD }}
+          UPLOAD_ALIAS: ${{ secrets.MF_UPLOAD_ALIAS }}
+        run: |
+          cd android
+          if [ -n "$UPLOAD_KEYSTORE_B64" ]; then
+            echo "$UPLOAD_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            export MF_KEYSTORE_FILE="$RUNNER_TEMP/upload.jks" MF_KEYSTORE_PASSWORD="$UPLOAD_PASSWORD" MF_KEY_PASSWORD="$UPLOAD_PASSWORD" MF_KEY_ALIAS="${UPLOAD_ALIAS:-upload}"
+            echo "Firmado con la llave de subida privada."
+          else
+            echo "::warning::Sin secretos MF_UPLOAD_*: el .aab va firmado con la llave del repositorio (solo para pruebas, no para Play)."
+          fi
+          ./gradlew bundleRelease --no-daemon
+          cp app/build/outputs/bundle/release/app-release.aab ../MusicFees.aab
       - uses: actions/upload-artifact@v4
         with:
           name: MusicFees-apk
-          path: MusicFees.apk
+          path: |
+            MusicFees.apk
+            MusicFees.aab
       - name: Publicar en Releases (descarga directa)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete apk --yes --cleanup-tag || true
-          gh release create apk MusicFees.apk --title "MusicFees APK (compilación ${{ github.run_number }})" \
-            --notes "Instala MusicFees.apk en tu Android. Cada compilación reemplaza a la anterior y se instala encima." --latest
+          gh release create apk MusicFees.apk MusicFees.aab --title "MusicFees APK (compilación ${{ github.run_number }})" \
+            --notes "Instala MusicFees.apk en tu Android (se instala encima de la anterior). MusicFees.aab es el paquete para Google Play." --latest

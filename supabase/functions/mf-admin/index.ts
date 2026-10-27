@@ -1,6 +1,6 @@
 // MusicFees: administración de cuentas. Solo la puede usar un administrador (mf_profiles.is_admin).
 // Usa la llave de servicio, que vive en el servidor de Supabase y nunca llega al navegador.
-// Acciones: list, create, password, delete.
+// Acciones: list, create, password, delete. Y «delete-me», que cualquier cuenta usa para borrarse a sí misma.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const cors = {
@@ -18,9 +18,21 @@ Deno.serve(async (req) => {
     const { data: who } = await admin.auth.getUser(token);
     if (!who?.user) return json({ error: "Entra con tu cuenta primero." }, 401);
     const { data: me } = await admin.from("mf_profiles").select("is_admin").eq("id", who.user.id).maybeSingle();
+    const body = await req.json().catch(() => ({}));
+
+    // Borrar mi cuenta (lo pide Google Play): se borran sus canciones, versiones y la cuenta.
+    if (body.action === "delete-me") {
+      if (me?.is_admin) {
+        const { count } = await admin.from("mf_profiles").select("id", { count: "exact", head: true }).eq("is_admin", true);
+        if ((count ?? 0) <= 1) return json({ error: "Eres el único administrador: nombra a otro antes de borrar tu cuenta." }, 400);
+      }
+      await admin.from("mf_songs").delete().eq("owner_id", who.user.id);
+      const { error } = await admin.auth.admin.deleteUser(who.user.id);
+      if (error) throw error;
+      return json({ ok: true });
+    }
     if (!me?.is_admin) return json({ error: "Solo un administrador puede administrar cuentas." }, 403);
 
-    const body = await req.json().catch(() => ({}));
     switch (body.action) {
       case "list": {
         const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 500 });
