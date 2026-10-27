@@ -371,3 +371,30 @@ body.still *, body.still *::before, body.still *::after { transition: none !impo
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 /* En pantallas anchas todas las filas caben: el ▶ sobra */
 @media (min-width: 900px) { .tbtn.more { display: none; } }
+/* Botón Guardar: verde con palomita si todo está guardado; ámbar si hay cambios por guardar */
+.savebtn { flex: none; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid #2f7a16; background: #183d10; color: #b9f0a4; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.savebtn.dirty { background: var(--amber); border-color: var(--amber); color: #1b1300; }
+.savebtn.err { background: var(--red); border-color: var(--red); color: #fff; }
+@media (max-width: 520px) { .songline .sync { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; } }
+/* Inicio */
+.sheet.home .card { max-width: 720px; margin: 0 auto; }
+.homehead { display: flex; align-items: center; gap: 12px; }
+.homehead .login-logo { width: 56px; height: 56px; margin: 0; }
+.homegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.homebtn { display: flex; align-items: center; gap: 12px; text-align: left; min-height: 72px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--btn); font-weight: 700; font-size: 15px; }
+.homebtn small { display: block; font-weight: 500; font-size: 12px; color: var(--muted-d); margin-top: 2px; }
+.homebtn .hi { font-size: 24px; width: 30px; text-align: center; flex: none; }
+.homebtn.main { grid-column: 1 / -1; background: var(--green); border-color: var(--green-2); min-height: 80px; font-size: 18px; }
+.homebtn.main small { color: #d6f5c8; }
+.homebtn.quiet { background: transparent; }
+.note.center { text-align: center; }
+/* Voces con notas: un punto debajo del número */
+.seg button.used { position: relative; }
+.seg button.used::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: currentColor; }
+.chg-badge { position: absolute; height: 20px; padding: 0 6px; border-radius: 10px; border: 0; background: #2f7bff; color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+/* Avisos legales */
+details.legal { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 8px 0; }
+details.legal summary { font-weight: 700; cursor: pointer; }
+details.legal h4 { margin: 10px 0 2px; font-size: 14px; }
+details.legal p { margin: 0 0 6px; color: var(--muted-d); line-height: 1.45; }
+.sheet button:disabled { opacity: .45; cursor: default; }

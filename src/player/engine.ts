@@ -1,7 +1,7 @@
 // Envoltura de alphaTab: render de partitura/tablatura y reproducción con el banco de sonidos elegido.
 import * as at from "@coderline/alphatab";
 import type { FxEngine, FxTrack } from "./fxEngine";
-import { drumKit, masterOf, type MasterFx } from "../score/model";
+import { drumKit, fxAtBar, fxChanges, masterOf, type MasterFx } from "../score/model";
 
 // alphaTab fuerza el programa 0 en las pistas de batería (Track.finish), así que el kit elegido
 // (cuarto, power, jazz, escobillas, electrónica, 808…) nunca llegaba al MIDI y siempre sonaba el
@@ -13,7 +13,9 @@ export const setKitScore = (s: at.model.Score | null) => { kitScore = s; };
   const H = at.midi.AlphaSynthMidiFileHandler.prototype as unknown as { addProgramChange(track: number, tick: number, channel: number, program: number): void };
   const orig = H.addProgramChange;
   H.addProgramChange = function (track: number, tick: number, channel: number, program: number) {
-    const kit = kitScore ? drumKit(kitScore, track) : undefined;
+    // alphaTab manda 0 en las pistas de batería: ahí va el kit elegido. Un cambio de kit escrito en un
+    // compás (programa distinto de 0) se respeta.
+    const kit = kitScore && program === 0 ? drumKit(kitScore, track) : undefined;
     return orig.call(this, track, tick, channel, kit ?? program);
   };
 }
@@ -125,7 +127,7 @@ export class Engine {
       this.playing = e.state === at.synth.PlayerState.Playing;
       this.emit("state", this.playing);
     });
-    this.api.playedBeatChanged.on((b) => this.emit("beat", b));
+    this.api.playedBeatChanged.on((b) => { this.applyScenes(b.voice.bar.index); this.emit("beat", b); });
     this.api.soundFontLoad.on((e) => this.emit("loadProgress", Math.round((e.loaded / Math.max(1, e.total)) * 100)));
     // Un banco descargado se entrega en bytes en cuanto el reproductor está listo para recibirlo.
     if (typeof source !== "string") {
@@ -164,8 +166,14 @@ export class Engine {
     if (!this.tracks.length) this.tracks = [0];
     // Misma canción y mismas pistas: alphaTab rehace solo desde el renglón del compás cambiado.
     const partial = same && fromBar !== undefined && prev === this.tracks.join();
-    this.api.renderScore(score, this.tracks, partial ? { firstChangedMasterBar: fromBar, reuseViewport: true } : undefined);
+    // El editor puede pintar la canción solo para este dibujo (voz activa); se quita en seguida, así
+    // los colores nunca llegan al archivo guardado.
+    const undo = this.tint?.();
+    try { this.api.renderScore(score, this.tracks, partial ? { firstChangedMasterBar: fromBar, reuseViewport: true } : undefined); }
+    finally { undo?.(); }
   }
+  /** Lo pone el editor: colorea temporalmente y devuelve cómo deshacerlo. */
+  tint: (() => () => void) | null = null;
   /** Cambia de banco de sonidos sin recargar la canción. */
   setSoundFont(source: string | Uint8Array) {
     if (source === this.source) return;
@@ -178,9 +186,25 @@ export class Engine {
   /** MIDI estándar y los tiempos del metrónomo (en segundos, en orden de reproducción con repeticiones). */
   /** Ticks → segundos de la canción cargada en el motor de estudio. */
   private toSec: ((tick: number) => number) | null = null;
+  /** Pistas congeladas (suenan desde su audio ya procesado, no desde el sintetizador). */
+  frozen = new Set<number>();
+  /** Congela `tracks` con su mezcla ya procesada (null = descongelar todo). Vuelve a cargar el MIDI. */
+  setFrozen(tracks: number[], buf: AudioBuffer | null) {
+    this.frozen = new Set(buf ? tracks : []);
+    this.fx?.setFrozen(buf);
+    this.fx?.route(this.fxTracks());
+    this.applyScenes(this.sceneBar, true);
+    if (this.fx) { this.midiDirty = false; this.api.loadMidiForScore(); }
+  }
   private smf1(): { midi: Uint8Array; beats: Beat[] } {
     const mf = new at.midi.MidiFile();
-    const gen = new at.midi.MidiFileGenerator(this.api.score!, this.api.settings, new at.midi.AlphaSynthMidiFileHandler(mf, true));
+    const handler = new at.midi.AlphaSynthMidiFileHandler(mf, true);
+    if (this.frozen.size) {
+      // Las notas de las pistas congeladas no van al sintetizador (ya suenan desde su audio).
+      const orig = handler.addNote.bind(handler), fr = this.frozen;
+      handler.addNote = (track: number, start: number, length: number, key: number, velocity: number, channel: number) => { if (!fr.has(track)) orig(track, start, length, key, velocity, channel); };
+    }
+    const gen = new at.midi.MidiFileGenerator(this.api.score!, this.api.settings, handler);
     gen.generate();
     this.toSec = tickToSeconds(mf);
     return { midi: mf.toBinary(), beats: beatTimes(mf, gen.tickLookup.masterBars) };
@@ -195,7 +219,8 @@ export class Engine {
     fx.countIn = this.count > 0;
     this.api.metronomeVolume = 0;
     this.api.countInVolume = 0;
-    this.fxTracks = tracks;
+    // Las pistas congeladas no pasan por sus cadenas en vivo (suenan ya procesadas): se quitan de la ruta.
+    this.fxTracks = () => tracks().filter((t) => !this.frozen.has(t.index));
     this.soundReady = false;
     this.api.settings.player.playerMode = at.PlayerMode.EnabledExternalMedia;
     this.api.updateSettings();
@@ -332,6 +357,7 @@ export class Engine {
   }
   private jumpTick(tick: number) {
     this.lastTick = tick;
+    this.applyScenes(this.barOfTick(tick));
     if (this.fx && this.toSec) this.fx.seek(this.toSec(tick) * 1000);
     try { this.api.tickPosition = tick; } catch { /* sin reproductor */ }
   }
@@ -349,6 +375,7 @@ export class Engine {
   private reseek() { try { this.api.tickPosition = this.lastTick; } catch { /* sin reproductor */ } }
   seekBeat(beat: at.model.Beat) {
     this.lastTick = beat.absolutePlaybackStart;
+    this.applyScenes(beat.voice.bar.index);
     // Con el motor de estudio se le avisa directo: mientras alphaTab recarga, ignora la búsqueda.
     if (this.fx && this.toSec) this.fx.seek(this.toSec(this.lastTick) * 1000);
     try {
@@ -388,9 +415,36 @@ export class Engine {
     if (!this.fx) return;
     this.fx.route(this.fxTracks());
     this.fx.setMaster(masterOf(score));
+    this.applyScenes(this.sceneBar, true);
+  }
+  // ---------- cambios de efectos dentro de una pista (desde cierto compás) ----------
+  private sceneBar = 0;
+  private sceneKeys = new Map<number, string>();
+  /** Pone en cada pista la cadena de efectos que le toca en el compás `bar`. */
+  applyScenes(bar: number, force = false) {
+    if (!this.fx || !this.score) return;
+    if (bar === this.sceneBar && !force) return;
+    this.sceneBar = bar;
+    const changes = fxChanges(this.score);
+    for (const k of Object.keys(changes)) {
+      const t = Number(k);
+      if (this.frozen.has(t)) continue;
+      const fx = fxAtBar(this.score, t, bar);
+      const key = JSON.stringify(fx);
+      if (!force && this.sceneKeys.get(t) === key) continue;
+      this.sceneKeys.set(t, key);
+      this.fx.setTrackFx(t, fx);
+    }
+    if (force) for (const t of [...this.sceneKeys.keys()]) if (!(t in changes)) this.sceneKeys.delete(t);
+  }
+  private barOfTick(tick: number) {
+    const mbs = this.score?.masterBars ?? [];
+    let b = 0;
+    while (b + 1 < mbs.length && mbs[b + 1].start <= tick) b++;
+    return b;
   }
   syncMix(score: Score) {
-    if (this.fx) { this.fx.route(this.fxTracks()); return; }
+    if (this.fx) { this.fx.route(this.fxTracks()); this.applyScenes(this.sceneBar, true); return; }
     for (const tr of score.tracks) {
       this.api.changeTrackMute([tr], tr.playbackInfo.isMute);
       this.api.changeTrackSolo([tr], tr.playbackInfo.isSolo);

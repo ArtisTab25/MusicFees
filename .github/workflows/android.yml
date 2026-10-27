@@ -41,7 +41,7 @@ jobs:
       - name: Compilar APK firmado
         env:
           MF_VERSION_CODE: ${{ github.run_number }}
-          MF_VERSION_NAME: 1.0.${{ github.run_number }}
+          MF_VERSION_NAME: 1.1.${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew
@@ -52,7 +52,7 @@ jobs:
       - name: Compilar paquete de Google Play (.aab)
         env:
           MF_VERSION_CODE: ${{ github.run_number }}
-          MF_VERSION_NAME: 1.0.${{ github.run_number }}
+          MF_VERSION_NAME: 1.1.${{ github.run_number }}
           UPLOAD_KEYSTORE_B64: ${{ secrets.MF_UPLOAD_KEYSTORE_B64 }}
           UPLOAD_PASSWORD: ${{ secrets.MF_UPLOAD_PASSWORD }}
           UPLOAD_ALIAS: ${{ secrets.MF_UPLOAD_ALIAS }}

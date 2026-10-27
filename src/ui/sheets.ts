@@ -6,12 +6,12 @@ import type { KeyInput } from "../editor/keys";
 import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
-import { kindOf, fxMap, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { kindOf, fxMap, fxChanges, fxAtBar, instrumentChanges, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { Capacitor } from "@capacitor/core";
 import { addVersion, deleteTrash, deleteVersion, libMeta, parseTags, setLibMeta, trash, trashList, versions, type LibMeta } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
-import { PRESETS, STYLES, TUNINGS, presetById } from "../score/instruments";
+import { GM_NAMES, PRESETS, STYLES, TUNINGS, gmName, presetById } from "../score/instruments";
 import { STRUMS } from "../score/strum";
 import { ordered } from "../score/clip";
 import { mergeTargets, planMerge, planSplitPitch, planSplitVoices, subScore, usedVoices } from "../score/tracks";
@@ -20,6 +20,7 @@ import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
 import { h, icon, onLongPress } from "./dom";
 import { ARTIFACT } from "../config";
+import LEGAL from "../legal.json";
 import type { Bank } from "../player/banks";
 
 export interface AppCtx {
@@ -39,6 +40,13 @@ export interface AppCtx {
   shareSong: () => Promise<string | null>;
   importScore: (s: at.model.Score, name?: string) => Promise<void>;
   refresh: () => void;
+  /** Cierra la canción abierta (al cerrar sesión): guarda lo pendiente y deja el editor vacío. */
+  unloadSong: () => Promise<void>;
+  freezeTracks: (tracks: number[]) => Promise<void>;
+  unfreeze: () => void;
+  readonly frozen: number[];
+  readonly freezing: boolean;
+  saveNow: () => Promise<void>;
   prefs: Record<string, unknown>;
   savePrefs: () => void;
   readonly songId: string | null;
@@ -47,6 +55,12 @@ export interface AppCtx {
 }
 
 const groupBy = <T,>(xs: T[], k: (x: T) => string) => xs.reduce((m, x) => { (m[k(x)] ??= []).push(x); return m; }, {} as Record<string, T[]>);
+/** Lista de sonidos: kits para batería; para lo demás, los 128 del banco (con nombres en español). */
+function soundSelect(drums: boolean, cur: number, label: string) {
+  if (drums) return h("select", { "aria-label": label }, PRESETS.filter((p) => p.kind === "drums").map((p) => h("option", { value: p.program, selected: p.program === cur }, p.name)));
+  const groups = ["Pianos", "Percusión afinada", "Órganos y acordeón", "Guitarras", "Bajos", "Cuerdas", "Ensambles y voces", "Metales", "Saxofones y dobles cañas", "Flautas", "Sintetizador (lead)", "Sintetizador (pad)", "Sintetizador (efectos)", "Étnicos", "Percusión", "Efectos de sonido"];
+  return h("select", { "aria-label": label }, groups.map((g, k) => h("optgroup", { label: g }, GM_NAMES.slice(k * 8, k * 8 + 8).map((n, j) => h("option", { value: k * 8 + j, selected: k * 8 + j === cur }, n)))));
+}
 function presetOptions(sel?: string) {
   return Object.entries(groupBy(PRESETS, (p) => p.group)).map(([g, ps]) =>
     h("optgroup", { label: g }, ps.map((p) => h("option", { value: p.id, selected: p.id === sel }, p.name))));
@@ -56,7 +70,11 @@ export class Sheets {
   private el: HTMLElement | null = null;
   constructor(private c: AppCtx) {}
 
+  /** Mientras estás en Inicio, cerrar una ventana te regresa a Inicio (no a una hoja vacía). */
+  private homeMode = false;
+  leaveHome() { if (this.homeMode) { this.homeMode = false; this.el?.remove(); this.el = null; } }
   close() {
+    if (this.homeMode && !this.el?.classList.contains("home")) { this.home(); return; }
     this.el?.remove(); this.el = null; this.c.refresh();
     const r = this.returnFocus; this.returnFocus = null;
     if (r && r.isConnected && r.id !== "kbd") r.focus({ preventScroll: true });
@@ -120,7 +138,7 @@ export class Sheets {
           h("span", { class: "stripe", style: `background:${meta.color ?? colors[i % colors.length]}` }),
           h("span", { class: "ic" }, icon(kind === "drums" ? "drum" : kind === "notation" ? "piano" : "guitar", 22)),
           h("button", { class: "nm", style: "background:none;border:0;text-align:left;padding:0", onclick: () => { ed.selectTrack(i); this.close(); } },
-            h("b", null, `${i + 1}  ${tr.name}${meta.locked ? " 🔒" : ""}`), h("small", null, PRESETS.find((p) => p.program === pi.program && p.kind === kind)?.name ?? `Sonido GM ${pi.program}`)),
+            h("b", null, `${i + 1}  ${tr.name}${meta.locked ? " 🔒" : ""}${this.c.frozen.includes(i) ? " ❄" : ""}`), h("small", null, (kind === "drums" ? PRESETS.find((p) => p.program === (drumKit(ed.score, i) ?? 0) && p.kind === "drums")?.name : PRESETS.find((p) => p.program === pi.program && p.kind === kind)?.name) ?? gmName(pi.program))),
           h("span", { class: "acts" },
             h("button", { class: "ibtn", "aria-label": "Ver esta pista", "aria-pressed": ed.renderTracks().includes(i), onclick: () => { ed.selectTrack(i); this.close(); } }, icon("eye", 18)),
             mute, solo),
@@ -151,8 +169,25 @@ export class Sheets {
           try { clip = JSON.parse(localStorage.getItem("mf:trackclip") || "null"); } catch { /* nada */ }
           return clip ? h("button", { class: "ghost", onclick: () => { this.ops([{ k: "trackPaste", json: clip!.json, name: clip!.name }]); ed.selectTrack(ed.score.tracks.length - 1); this.c.toast(`«${clip!.name}» (de ${clip!.from || "otra canción"}) se pegó como pista nueva.`); render(); } }, `Pegar pista copiada: ${clip.name}`) : null;
         })()),
+      this.freezeSection(),
       h("div", { class: "sec" }, h("h3", null, "Master"), h("div", { class: "field" }, h("label", null, "Volumen general"), master)),
       h("p", { class: "note" }, "Mantén presionada una pista (o toca ⋯) para duplicarla, transponerla, cambiar su afinación, bloquearla, darle color o copiarla a otra canción."));
+  }
+
+  /** Congelar pistas: la forma de que 10 pistas con muchos efectos suenen fluidas en el teléfono. */
+  private freezeSection() {
+    const { ed } = this.c;
+    const fr = new Set(this.c.frozen), n = ed.score.tracks.length;
+    const others = ed.score.tracks.map((t) => t.index).filter((t) => t !== ed.cursor.t);
+    const go = (list: number[]) => async () => { this.close(); await this.c.freezeTracks(list); };
+    return h("div", { class: "sec" }, h("h3", null, "Fluidez: congelar pistas"),
+      h("p", { class: "note" }, fr.size
+        ? `❄ Congeladas: ${[...fr].map((t) => ed.score.tracks[t]?.name ?? t + 1).join(", ")}. Suenan desde su audio ya procesado; el teléfono solo calcula las demás. Si editas una congelada, vuelve a sonar en vivo sola.`
+        : "Congelar procesa una vez cada pista con todos sus efectos (como grabarla) y la toca como audio: suena igual y casi no gasta procesador. Ideal con muchas pistas y cadenas de efectos. Tarda un poco al congelar."),
+      h("div", { class: "inline", style: "flex-wrap:wrap" },
+        h("button", { class: "primary", disabled: this.c.freezing || n < 2, onclick: go(others) }, `Congelar todas menos «${ed.track.name}»`),
+        h("button", { class: "ghost", disabled: this.c.freezing, onclick: go(ed.score.tracks.map((t) => t.index)) }, "Congelar todas"),
+        fr.size ? h("button", { class: "ghost", onclick: () => { this.c.unfreeze(); this.close(); this.c.toast("Todas las pistas suenan en vivo otra vez."); } }, "Descongelar") : null));
   }
 
   // ---------- menú de pista (mantener presionada) ----------
@@ -248,13 +283,16 @@ export class Sheets {
     const nm = h("input", { type: "text", value: tr.name, "aria-label": "Nombre de la pista" });
     nm.onchange = () => this.ops([{ k: "trackProp", t: i, prop: "name", val: nm.value }]);
     const curProg = kind === "drums" ? (drumKit(ed.score, i) ?? 0) : tr.playbackInfo.program;
-    const prog = h("select", { "aria-label": "Sonido" }, presetOptions(PRESETS.find((p) => p.program === curProg && p.kind === kind)?.id));
+    // Cualquier pista con notas (tablatura o partitura) puede sonar con cualquier instrumento del banco:
+    // una tablatura de bajo puede sonar a piano; lo escrito no cambia. La batería usa kits.
+    const prog = soundSelect(kind === "drums", curProg, "Sonido");
     prog.onchange = () => {
-      const p = presetById(prog.value)!;
-      if (p.kind !== kind) { this.c.toast(`«${p.name}» se escribe distinto a esta pista. Agrega una pista nueva desde Tracks.`, true); prog.value = PRESETS.find((x) => x.program === curProg && x.kind === kind)?.id ?? ""; return; }
-      this.ops([{ k: "trackProp", t: i, prop: "program", val: p.program }]);
+      const p = Number(prog.value);
+      this.ops([{ k: "trackProp", t: i, prop: "program", val: p }]);
+      if (kind !== "drums") this.c.toast(`Suena como ${gmName(p)}. La ${kind === "tab" ? "tablatura" : "partitura"} se queda igual.`);
     };
     body.append(h("div", { class: "sec" }, h("h3", null, "Información"), field("Nombre", nm), field("Sonido", prog)));
+    body.append(this.changesSection(i));
     if (kind === "tab") {
       const n = st.tuning.length;
       const tunSel = h("select", { "aria-label": "Afinación" },
@@ -284,6 +322,39 @@ export class Sheets {
     body.append(this.fxSection(i));
   }
 
+  /** Cambios dentro de la pista desde cierto compás: otro sonido u otra cadena de efectos. */
+  private changesSection(i: number) {
+    const { ed } = this.c;
+    const tr = ed.score.tracks[i], drums = kindOf(tr) === "drums", b = ed.cursor.b;
+    const again = () => this.sets("track");
+    const inst = instrumentChanges(ed.score, i), fxc = fxChanges(ed.score)[i] ?? [];
+    const sound = soundSelect(drums, inst.find((x) => x.b === b)?.program ?? tr.playbackInfo.program, `Sonido desde el compás ${b + 1}`);
+    const presetSel = h("select", { "aria-label": "Efectos desde este compás" },
+      h("option", { value: "copy" }, "Copia de los efectos que suenan aquí"),
+      h("option", { value: "none" }, "Sin efectos"),
+      FX_PRESETS.map((p) => h("option", { value: p.id }, p.name)));
+    const list = [
+      ...inst.map((x) => ({ b: x.b, what: `Sonido: ${drums ? `kit ${x.program}` : gmName(x.program)}`, del: () => this.ops([{ k: "instrumentAt", t: i, b: x.b, program: null }]) })),
+      ...fxc.map((x) => ({ b: x.b, what: `Efectos: ${x.fx ? (FX_PRESETS.find((p) => p.id === x.fx!.preset)?.name ?? "personalizados") : "sin efectos"}`, del: () => this.ops([{ k: "fxAt", t: i, b: x.b, fx: null, del: true }]) })),
+    ].sort((x, y) => x.b - y.b);
+    return h("div", { class: "sec" }, h("h3", null, `Cambios desde el compás ${b + 1}`),
+      h("p", { class: "note" }, "Dentro de la misma pista, desde un compás puede sonar otro instrumento o con otra cadena de efectos (por ejemplo: limpio en el verso y distorsión en el coro). Pon el cursor en el compás y elige."),
+      h("div", { class: "inline" }, sound, h("button", { class: "ghost", onclick: () => {
+        if (b === 0) { this.ops([{ k: "trackProp", t: i, prop: "program", val: Number(sound.value) }]); again(); return; }
+        this.ops([{ k: "instrumentAt", t: i, b, program: Number(sound.value) }]); this.c.toast(`Desde el compás ${b + 1}: ${drums ? "otro kit" : gmName(Number(sound.value))}.`); again();
+      } }, "Cambiar sonido aquí")),
+      h("div", { class: "inline" }, presetSel, h("button", { class: "ghost", onclick: () => {
+        if (b === 0) { this.c.toast("En el compás 1 se usan los efectos principales de la pista (abajo)."); return; }
+        const v = presetSel.value;
+        const fx = v === "copy" ? fxAtBar(ed.score, i, b) : v === "none" ? null : presetFx(v);
+        this.ops([{ k: "fxAt", t: i, b, fx: fx ? JSON.parse(JSON.stringify(fx)) : null }]);
+        this.c.toast(`Desde el compás ${b + 1} la pista usa otra cadena de efectos. Edítala abajo con el cursor en ese compás.`); again();
+      } }, "Cambiar efectos aquí")),
+      list.length ? h("div", { class: "trlist" }, list.map((x) => h("div", { class: "tr", style: "grid-template-columns:1fr auto" },
+        h("button", { class: "listbtn", onclick: () => { ed.gotoBar(x.b); again(); } }, `Compás ${x.b + 1}`, h("small", null, x.what)),
+        h("span", { class: "acts" }, h("button", { class: "ibtn", "aria-label": `Quitar cambio del compás ${x.b + 1}`, onclick: () => { x.del(); again(); } }, icon("trash", 18)))))) : null);
+  }
+
   /** Efectos de la pista: preset y perillas. Se oyen al momento; se guardan al soltar. */
   private fxSection(i: number) {
     const { ed, engine } = this.c;
@@ -294,8 +365,11 @@ export class Sheets {
       sec.append(h("p", { class: "note" }, "Amplificador con distorsión, ecualizador, compresor, chorus, delay, reverb y pedales para cada pista. Usan el motor de estudio (también toca metrónomo y cuenta inicial)."), btn);
       return sec;
     }
-    let cur: TrackFx | null = fxMap(ed.score)[i] ?? null;
-    const save = () => ed.commit([{ k: "trackFx", t: i, fx: cur }], { render: false }); // sin redibujar: no corta la reproducción
+    // Si la pista cambia de efectos en algún compás, se edita la cadena que suena donde está el cursor.
+    const changeHere = (fxChanges(ed.score)[i] ?? []).filter((c) => c.b <= ed.cursor.b).pop() ?? null;
+    let cur: TrackFx | null = changeHere ? changeHere.fx : (fxMap(ed.score)[i] ?? null);
+    const save = () => ed.commit([changeHere ? { k: "fxAt", t: i, b: changeHere.b, fx: cur } : { k: "trackFx", t: i, fx: cur }], { render: false }); // sin redibujar: no corta la reproducción
+    sec.firstElementChild!.textContent = changeHere ? `Efectos desde el compás ${changeHere.b + 1}` : (fxChanges(ed.score)[i]?.length ? "Efectos desde el inicio" : "Efectos");
     const sel = h("select", { "aria-label": "Preset de efectos", id: "fx-preset" },
       h("option", { value: "", selected: !cur }, "Sin efectos"),
       FX_PRESETS.map((p) => h("option", { value: p.id, selected: cur?.preset === p.id }, p.name)),
@@ -397,6 +471,8 @@ export class Sheets {
     const close = (fn: () => void) => () => { this.close(); fn(); };
     const items: Record<string, HTMLElement[]> = {
       Archivo: [
+        item("Inicio", "Menú principal: canciones, cuenta, ajustes", () => this.home()),
+        item("Guardar", "Ahora mismo (también se guarda solo)", close(() => this.c.saveNow())),
         item("Nueva canción", "Por estilo: rock, bossa, corrido…", () => this.newSong()),
         item("Biblioteca", "Tus canciones y pistas de muestra", () => this.library()),
         item("Importar archivo", "Guitar Pro (.gp, .gp5, .gpx), MusicXML", () => this.importDialog()),
@@ -489,9 +565,9 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 1.0", () => this.about()),
+        item("Acerca de MusicFees", "Versión 1.1", () => this.about()),
         item("Licencias", "Programas y recursos de terceros", () => this.about("licencias")),
-        item("Privacidad y términos", "Qué se guarda y para qué", () => this.about("privacidad")),
+        item("Avisos legales", "Términos, privacidad, derechos de autor", () => this.about("avisos")),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -581,7 +657,7 @@ export class Sheets {
     const openId = (id: string) => () => { this.close(); this.c.openSong(id); };
     /** Antes de borrar, la canción completa va a la papelera (30 días). */
     const binned = (id: string, title: string, del: () => Promise<void> | void, where: "local" | "cloud" | "claude") => async () => {
-      let json = loadLocalDoc(id);
+      let json = await loadLocalDoc(id);
       try {
         if (!json && where === "cloud") json = (await cloud.get(id))?.data ?? null;
         if (!json && where === "claude" && claudeLib) json = await claudeLib.load(id);
@@ -597,7 +673,7 @@ export class Sheets {
     const account = h("div", { class: "inline" },
       h("span", { class: "note", style: "flex:1;min-width:180px" }, who),
       !claudeLib && cloud.session?.isAdmin ? h("button", { class: "ghost", onclick: () => this.users() }, "Cuentas") : null,
-      !claudeLib && cloud.session ? h("button", { class: "ghost", onclick: async () => { await cloud.logout(); this.login(); } }, "Cerrar sesión") : null,
+      !claudeLib && cloud.session ? h("button", { class: "ghost", onclick: async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); } }, "Cerrar sesión") : null,
       !claudeLib && cloud.session ? h("button", { class: "ghost danger", onclick: () => this.deleteAccount() }, "Borrar mi cuenta") : null,
       !claudeLib && !cloud.session ? h("button", { class: "primary", onclick: () => this.login() }, "Entrar") : null);
 
@@ -626,7 +702,7 @@ export class Sheets {
     const onDevice = entries.filter((e) => e.id.startsWith("local-"));
     local.replaceChildren(...(onDevice.length ? onDevice.map((e) => row(e.title, `${when(e.updated)}${e.id === this.c.songId ? " · abierta" : ""}`, openId(e.id), binned(e.id, e.title, () => forgetSong(e.id), "local"),
       (cloud.session || claudeLib) ? h("button", { class: "ibtn", "aria-label": "Subir a mi biblioteca", title: "Subir a mi biblioteca", onclick: async () => {
-        const json = loadLocalDoc(e.id);
+        const json = await loadLocalDoc(e.id);
         if (!json) return;
         this.close();
         const { fromJson } = await import("../score/model");
@@ -640,7 +716,7 @@ export class Sheets {
       const { fromJson } = await import("../score/model");
       let n = 0;
       for (const e of onDevice) {
-        const json = loadLocalDoc(e.id);
+        const json = await loadLocalDoc(e.id);
         if (!json) continue;
         try { const sc = fromJson(json); await cloud.createMine(sc.title || e.title, json); forgetSong(e.id); n++; b.textContent = `Subiendo… ${n}/${onDevice.length}`; }
         catch (err) { this.c.toast((err as Error).message, true); break; }
@@ -697,9 +773,49 @@ export class Sheets {
         e.preventDefault();
         if (word.value.trim().toUpperCase() !== "BORRAR") { msg.textContent = "Escribe BORRAR para confirmar."; return; }
         msg.textContent = "Borrando…";
-        try { await cloud.deleteMe(); this.close(); this.c.toast("Tu cuenta y tus canciones de la nube se borraron."); this.login(true); }
+        try { await this.c.unloadSong(); await cloud.deleteMe(); this.homeMode = false; this.c.toast("Tu cuenta y tus canciones de la nube se borraron."); this.login(true); }
         catch (err) { msg.textContent = (err as Error).message; }
       } }, word, h("button", { class: "primary danger" }, "Borrar para siempre")), msg);
+  }
+
+  /** Primera vez (o cuando cambian los avisos): leer y aceptar antes de usar la app. */
+  legalGate(onAccept: () => void) {
+    const box = h("input", { type: "checkbox", id: "lg-ok" });
+    const go = h("button", { class: "primary", disabled: true }, "Aceptar y continuar");
+    box.onchange = () => { go.disabled = !box.checked; };
+    go.onclick = () => { this.c.prefs.legal = LEGAL.version; this.c.savePrefs(); this.el?.remove(); this.el = null; onAccept(); };
+    this.open("Antes de empezar", "gate",
+      h("p", null, LEGAL.summary),
+      ...LEGAL.sections.map((sec) => h("details", { class: "legal" }, h("summary", null, sec.title),
+        ...sec.items.map(([t, txt]) => h("div", null, h("h4", null, t), h("p", null, txt))))),
+      h("label", { class: "pref", for: "lg-ok" }, box, h("span", null, "Leí y acepto los términos de uso, el aviso de privacidad y los demás avisos.")),
+      go);
+  }
+  get legalAccepted() { return this.c.prefs.legal === LEGAL.version; }
+
+  /** Inicio: el menú principal, fuera de la hoja de edición. */
+  home() {
+    const { cloud, claudeLib, ed } = this.c;
+    this.homeMode = true;
+    const big = (icon2: string, label: string, sub: string, fn: () => void, cls = "") => h("button", { class: `homebtn ${cls}`, onclick: fn }, h("span", { class: "hi", "aria-hidden": "true" }, icon2), h("span", null, label, sub ? h("small", null, sub) : null));
+    const who = claudeLib ? "Con tu cuenta de Claude" : cloud.session ? `Hola, ${cloud.session.username}${cloud.session.isAdmin ? " · administrador" : ""}` : "Sin cuenta: lo que escribas queda en este dispositivo";
+    const cont = this.c.songId ? big("▶", "Continuar", ed.score.title || "Sin título", () => { this.homeMode = false; this.el?.remove(); this.el = null; this.c.refresh(); }, "main") : null;
+    this.open("MusicFees", "gate",
+      h("div", { class: "homehead" }, h("img", { src: `${import.meta.env.BASE_URL}icons/icon-192.png`, alt: "", class: "login-logo" }), h("p", { class: "note" }, who)),
+      h("div", { class: "homegrid" },
+        cont,
+        big("♫", "Mis canciones", "Biblioteca, carpetas y muestras", () => this.library()),
+        big("+", "Nueva canción", "Por estilo: rock, corrido, cumbia…", () => this.newSong()),
+        big("⇪", "Importar", "Guitar Pro, MusicXML", () => this.importDialog()),
+        big("⚙", "Preferencias", "Vista, sonido, accesibilidad", () => this.prefsSheet()),
+        big("?", "Ayuda", "Atajos de teclado", () => this.help()),
+        big("§", "Avisos legales", "Términos, privacidad y licencias", () => this.about("avisos")),
+        !claudeLib && cloud.session?.isAdmin ? big("👥", "Cuentas", "Crear y administrar cuentas", () => this.users()) : null,
+        !claudeLib ? (cloud.session
+          ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
+          : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
+      h("p", { class: "note center" }, "MusicFees 1.1 · gratis, sin anuncios"));
+    this.el?.classList.add("home");
   }
 
   /** Pantalla de acceso. `gate` la deja sin botón de cerrar (al arrancar). */
@@ -709,11 +825,10 @@ export class Sheets {
     const pass = h("input", { type: "password", id: "lg-pass", autocomplete: "current-password", "aria-label": "Contraseña", placeholder: "Contraseña" });
     const msg = h("p", { class: "progress", "aria-live": "polite" });
     const go = h("button", { class: "primary" }, "Entrar");
-    const offline = h("button", { type: "button", class: "ghost", onclick: () => { this.c.prefs.offline = true; this.c.savePrefs(); this.close(); this.library(); } }, "Usar sin cuenta");
+    const offline = h("button", { type: "button", class: "ghost", onclick: () => { this.c.prefs.offline = true; this.c.savePrefs(); this.home(); } }, "Usar sin cuenta");
     const native = Capacitor.isNativePlatform();
     const google = h("button", { type: "button", class: "google", onclick: async () => {
-      if (native) { msg.textContent = "En la app de Android, entra con correo y contraseña. Con Google, entra desde la página web (pronto también aquí)."; return; }
-      msg.textContent = "Abriendo Google…";
+      msg.textContent = native ? "Abriendo Google en el navegador; al terminar regresas aquí." : "Abriendo Google…";
       try { this.c.prefs.offline = false; this.c.savePrefs(); await cloud.loginGoogle(); } catch (err) { msg.textContent = (err as Error).message; }
     } }, h("span", { class: "g" }, "G"), "Entrar con Google");
     const forgot = h("button", { type: "button", class: "linkbtn", onclick: async () => {
@@ -726,15 +841,15 @@ export class Sheets {
       try {
         await cloud.login(user.value, pass.value);
         this.c.prefs.offline = false; this.c.savePrefs();
-        this.close();
         this.c.toast(`Hola, ${cloud.session!.username}.`);
-        this.library();
+        this.home();
       } catch (err) { msg.textContent = (err as Error).message; }
       go.disabled = false;
     } }, h("div", { class: "field" }, h("label", { for: "lg-user" }, "Correo"), user), h("div", { class: "field" }, h("label", { for: "lg-pass" }, "Contraseña"), pass),
       h("div", { class: "inline" }, go, offline), forgot, msg);
     const intro = h("p", { class: "note" }, "Entra con tu cuenta para guardar tu música en la nube y abrirla en cualquier dispositivo. Si no tienes cuenta, crea una con Google o pídela al administrador.");
-    this.open("MusicFees", gate ? "gate" : "full", h("img", { src: `${import.meta.env.BASE_URL}icons/icon-192.png`, alt: "", class: "login-logo" }), intro, google, h("p", { class: "or" }, "o con tu correo"), form);
+    const legal = h("p", { class: "note" }, "Al entrar o usar MusicFees aceptas los ", h("button", { type: "button", class: "linkbtn", onclick: () => this.about("avisos") }, "avisos legales"), ".");
+    this.open("MusicFees", gate ? "gate" : "full", h("img", { src: `${import.meta.env.BASE_URL}icons/icon-192.png`, alt: "", class: "login-logo" }), intro, google, h("p", { class: "or" }, "o con tu correo"), form, legal);
     user.focus();
   }
 
@@ -1419,8 +1534,9 @@ export class Sheets {
       h("p", { class: "note" }, "Toca la tablatura sobre la cuerda que quieras y escribe con el teclado de MusicFees que aparece abajo. Si prefieres el teclado del teléfono (o tienes uno físico), todo esto funciona con sus teclas; las letras van en mayúscula o minúscula."),
       h("table", { class: "help-table" }, rows));
   }
-  about(tab: "acerca" | "licencias" | "privacidad" | "terminos" = "acerca") {
-    const tabs = h("div", { class: "menu-tabs", role: "tablist" }, ([["acerca", "Acerca de"], ["licencias", "Licencias"], ["privacidad", "Privacidad"], ["terminos", "Términos"]] as const)
+  about(tab: "acerca" | "licencias" | "privacidad" | "terminos" | "avisos" = "acerca") {
+    if (tab === "privacidad" || tab === "terminos") tab = "avisos";
+    const tabs = h("div", { class: "menu-tabs", role: "tablist" }, ([["acerca", "Acerca de"], ["avisos", "Avisos legales"], ["licencias", "Licencias"]] as const)
       .map(([id, l]) => h("button", { role: "tab", "aria-selected": id === tab, "aria-pressed": id === tab, onclick: () => this.about(id) }, l)));
     const P = (t: string) => h("p", null, t), N = (t: string) => h("p", { class: "note" }, t);
     const L: [string, string, string][] = [
@@ -1441,7 +1557,7 @@ export class Sheets {
     ];
     const body: Record<typeof tab, HTMLElement[]> = {
       acerca: [
-        h("p", null, h("b", null, "MusicFees 1.0"), " — tablaturas y partituras multipista, con edición en dúo, comentarios y propuestas."),
+        h("p", null, h("b", null, "MusicFees 1.1"), " — tablaturas y partituras multipista, con edición en dúo, comentarios y propuestas."),
         P("Hecha en Comalcalco, Tabasco. Gratuita, sin anuncios y sin vender datos."),
         N("Código: github.com/ArtisTab25/MusicFees · Reportar un problema: github.com/ArtisTab25/MusicFees/issues"),
       ],
@@ -1450,20 +1566,13 @@ export class Sheets {
         h("div", { class: "trlist" }, L.map(([n, what, lic]) => h("div", { class: "tr", style: "grid-template-columns:1fr" }, h("div", { class: "nm" }, h("b", null, n), h("small", null, `${what} · ${lic}`))))),
         N("Los plugins de la comunidad se cargan solo cuando eliges uno; el código fuente de los efectos GPL/LGPL está en su carpeta (.dsp) y en sus proyectos originales."),
       ],
-      privacidad: [
-        P("Qué guardamos: si creas una cuenta, tu correo y nombre; tus canciones, versiones, carpetas, etiquetas y comentarios. Se guardan en Supabase (servidores en la nube) y en tu dispositivo."),
-        P("Sin cuenta, todo queda solo en tu dispositivo."),
-        P("Para qué: solo para que puedas guardar, abrir y compartir tu música. No hay anuncios, no hay rastreo y no vendemos ni compartimos tus datos."),
-        P("Edición en dúo: quien tenga el enlace de una canción puede verla y editarla. Comparte ese enlace solo con quien quieras."),
-        P("Borrar tus datos: en Biblioteca → «Borrar mi cuenta» se borran tu cuenta, tus canciones de la nube y sus versiones. Lo guardado en el dispositivo se borra al desinstalar la app o limpiar los datos del navegador."),
-        N("Política completa: artistab25.github.io/MusicFees/privacidad.html"),
+      avisos: [
+        h("p", { class: "note" }, `Versión ${LEGAL.version} · vigente desde el ${LEGAL.updated}. También en artistab25.github.io/MusicFees/legal.html`),
+        h("p", null, LEGAL.summary),
+        ...LEGAL.sections.map((sec, k) => h("details", { class: "legal", open: k === 0 }, h("summary", null, sec.title),
+          ...sec.items.map(([t, txt]) => h("div", null, h("h4", null, t), h("p", null, txt))))),
       ],
-      terminos: [
-        P("MusicFees es gratuita y se ofrece tal cual, sin garantías. Haz respaldos (Exportar → Guitar Pro) de lo importante."),
-        P("Tu música es tuya: MusicFees no reclama derechos sobre lo que escribes."),
-        P("Respeta los derechos de autor: sube y comparte solo música tuya o que tengas permiso de usar."),
-        P("No uses el servicio para dañar a otros ni para saturarlo. Podemos suspender cuentas que lo hagan."),
-      ],
+
     };
     this.open("Acerca de MusicFees", "full", tabs, ...body[tab]);
   }

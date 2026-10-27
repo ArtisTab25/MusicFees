@@ -27,6 +27,8 @@ export class Editor {
   private listeners: Listener[] = [];
   /** Envía operaciones al dúo; lo conecta la capa de colaboración. */
   outbox: ((ops: Op[]) => void) | null = null;
+  /** Avisa qué cambió (null = toda la canción: deshacer, rehacer, abrir otra). Lo usan las pistas congeladas. */
+  onOps: ((ops: Op[] | null) => void) | null = null;
   onDirty: (() => void) | null = null;
   private digitBuf = { key: "", first: -1, at: 0 };
   /** Selección activa (una pista y una voz; puede cruzar compases). */
@@ -38,6 +40,7 @@ export class Editor {
 
   constructor(score: Score, public engine: Engine) {
     this.score = score;
+    engine.tint = () => this.tintVoices();
   }
 
   // ---------- JSON de la canción (historial y guardado) ----------
@@ -114,6 +117,7 @@ export class Editor {
     this.changed(true);
     this.clampCursor();
     if (!this.proposal) this.outbox?.(ops);
+    this.onOps?.(ops);
     this.onDirty?.();
     if (opts.render !== false) this.rerender(firstBar(ops));
     // Efectos y masterizado no cambian el dibujo: se aplican directo al motor de estudio
@@ -129,16 +133,45 @@ export class Editor {
     finishScore(this.score);
     this.changed(false);
     this.clampCursor();
+    this.onOps?.(ops);
     this.rerender();
     this.emit();
   }
   replaceScore(score: Score, keepHistory = false) {
     this.score = score;
+    this.onOps?.(null);
     this.changed(false);
     if (!keepHistory) { this.undoStack.length = 0; this.redoStack.length = 0; }
     this.clampCursor();
     this.rerender();
     this.emit();
+  }
+  /** Voces con notas en la pista (para marcar los botones 1–4). */
+  usedVoices(t = this.cursor.t): Set<number> {
+    const out = new Set<number>();
+    for (const bar of this.score.tracks[t]?.staves[0].bars ?? []) bar.voices.forEach((v, i) => { if (!v.isEmpty && v.beats.some((b) => b.notes.length)) out.add(i); });
+    return out;
+  }
+  /** Si la pista tiene varias voces (hojas encimadas), las que no se están editando se pintan gris
+   *  claro. Solo dura lo que tarda en mandarse a dibujar. */
+  private tintVoices(): () => void {
+    const t = this.cursor.t, v = this.cursor.v, tr = this.score.tracks[t];
+    if (!tr || this.usedVoices(t).size < 2 && v === 0) return () => {};
+    const M = at.model, gray = new M.Color(160, 164, 178, 255);
+    const B = M.BeatSubElement, N = M.NoteSubElement;
+    const beatParts = [B.StandardNotationStem, B.StandardNotationFlags, B.StandardNotationBeams, B.StandardNotationTuplet, B.StandardNotationRests, B.StandardNotationEffects,
+      B.GuitarTabStem, B.GuitarTabFlags, B.GuitarTabBeams, B.GuitarTabTuplet, B.GuitarTabRests, B.GuitarTabEffects, B.Effects];
+    const noteParts = [N.StandardNotationNoteHead, N.StandardNotationAccidentals, N.StandardNotationEffects, N.GuitarTabFretNumber, N.GuitarTabEffects, N.Effects];
+    const touched: (at.model.Voice | at.model.Beat | at.model.Note)[] = [];
+    for (const st of tr.staves) for (const bar of st.bars) bar.voices.forEach((voice, vi) => {
+      if (vi === v || voice.isEmpty) return;
+      const vs = new M.VoiceStyle(); vs.colors.set(M.VoiceSubElement.Glyphs, gray); voice.style = vs; touched.push(voice);
+      for (const beat of voice.beats) {
+        const bs = new M.BeatStyle(); for (const k of beatParts) bs.colors.set(k, gray); beat.style = bs; touched.push(beat);
+        for (const n of beat.notes) { const ns = new M.NoteStyle(); for (const k of noteParts) ns.colors.set(k, gray); n.style = ns; touched.push(n); }
+      }
+    });
+    return () => { for (const x of touched) (x as { style?: unknown }).style = undefined; };
   }
   /** Vuelve a dibujar. Con `fromBar`, solo desde el renglón de ese compás (mucho más rápido al escribir). */
   rerender(fromBar?: number) {
@@ -158,6 +191,7 @@ export class Editor {
     this.cleanJson = prev; this.unsnapped = false;
     this.clampCursor();
     if (!this.proposal) this.outbox?.([{ k: "load", json: prev }]);
+    this.onOps?.(null);
     this.onDirty?.();
     this.rerender();
     this.emit();
@@ -172,6 +206,7 @@ export class Editor {
     this.cleanJson = next; this.unsnapped = false;
     this.clampCursor();
     if (!this.proposal) this.outbox?.([{ k: "load", json: next }]);
+    this.onOps?.(null);
     this.onDirty?.();
     this.rerender();
     this.emit();

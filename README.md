@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 1.0** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 1.1** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,16 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Versión 1.1
+
+- **Guardar**: botón visible (✓ Guardado / 💾 Guardar / ⚠) y Ctrl + S. Las canciones del dispositivo ahora van en IndexedDB comprimidas; antes, en localStorage (~5 MB en total), las canciones grandes fallaban al guardarse sin avisar.
+- **Inicio**: menú principal fuera de la hoja (continuar, mis canciones, nueva, importar, preferencias, ayuda, avisos, cuenta). Cerrar sesión saca de la canción y regresa al ingreso.
+- **Voces 1–4**: cada voz es una «hoja» encimada en la misma pista. La que editas se ve normal y las demás en gris; los botones marcan con un punto las que tienen notas, y en una voz vacía el cursor aparece al inicio del compás.
+- **Cualquier sonido en cualquier pista**: una tablatura de bajo puede sonar a piano (los 128 sonidos del banco); lo escrito no cambia.
+- **Cambios dentro de la pista**: desde cualquier compás, otro sonido u otra cadena de efectos (Sets → «Cambios desde el compás»). Se ven como etiquetas en la partitura, suenan en el motor de estudio y se respetan al exportar.
+- **Congelar pistas** (Tracks → Fluidez): cada pista se procesa una vez con sus efectos y se toca como audio. Medido con 10 pistas de RelaF con cadenas completas: hilo de audio de 42 % a 3 % de un núcleo. Congelar tarda (unos 30 s por pista pesada en computadora; varios minutos en un teléfono). Editar una pista congelada la regresa a sonar en vivo.
+- **Avisos legales completos** (`src/legal.json` → app, `legal.html` y `privacidad.html`) y aceptación la primera vez.
 
 ## Versión 1.0 (fases 3, 7, 8 y 9)
 

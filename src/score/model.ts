@@ -57,6 +57,10 @@ export type Op =
   | { k: "trackPaste"; json: string; name?: string }
   // Colaboración: comentario por compás (con id: agregar o reemplazar; del: quitar) y propuestas
   | { k: "comment"; c?: BarComment; del?: string }
+  /** Desde el compás b la pista cambia de sonido (null = quitar el cambio). */
+  | { k: "instrumentAt"; t: number; b: number; program: number | null }
+  /** Desde el compás b la pista usa otra cadena de efectos (del: quitar el cambio). */
+  | { k: "fxAt"; t: number; b: number; fx: TrackFx | null; del?: boolean }
   | { k: "proposal"; p?: Proposal; del?: string };
 
 /** Formas de bend que se escriben con un toque (valores en cuartos de tono: 4 = un tono). */
@@ -151,6 +155,53 @@ function remapTrackData(score: Score, newIndexOf: (old: number) => number | null
   };
   writeFx(score, move(fxMap(score)));
   writeMeta(score, move(metaMap(score)));
+  writeFxChanges(score, move(fxChanges(score)));
+}
+
+// ---------- cambios dentro de la pista: sonido y cadena de efectos desde un compás ----------
+// El sonido se guarda como automatización de instrumento de alphaTab (viaja también a Guitar Pro);
+// la cadena de efectos, en `notices` (MFFC1: pista → [{ b, fx }]).
+const FC_TAG = "MFFC1:";
+export interface FxChange { b: number; fx: TrackFx | null }
+export function fxChanges(score: Score): Record<number, FxChange[]> {
+  const line = (score.notices || "").split("\n").find((l) => l.startsWith(FC_TAG));
+  if (!line) return {};
+  try { return JSON.parse(line.slice(FC_TAG.length)) as Record<number, FxChange[]>; } catch { return {}; }
+}
+function writeFxChanges(score: Score, map: Record<number, FxChange[]>) {
+  const rest = (score.notices || "").split("\n").filter((l) => l && !l.startsWith(FC_TAG));
+  for (const k of Object.keys(map)) if (!map[Number(k)]?.length) delete map[Number(k)];
+  if (Object.keys(map).length) rest.push(FC_TAG + JSON.stringify(map));
+  score.notices = rest.join("\n");
+}
+/** Efectos que suenan en la pista `t` en el compás `b` (el último cambio antes o en ese compás). */
+export function fxAtBar(score: Score, t: number, b: number): TrackFx | null {
+  const list = fxChanges(score)[t] ?? [];
+  let cur: FxChange | null = null;
+  for (const c of list) if (c.b <= b && (!cur || c.b >= cur.b)) cur = c;
+  return cur ? cur.fx : (fxMap(score)[t] ?? null);
+}
+/** Cambios de sonido de una pista: [compás, programa GM]. */
+export function instrumentChanges(score: Score, t: number): { b: number; program: number }[] {
+  const out: { b: number; program: number }[] = [];
+  score.tracks[t]?.staves[0].bars.forEach((bar, b) => {
+    for (const v of bar.voices) for (const beat of v.beats) for (const a of beat.automations) if (a.type === M.AutomationType.Instrument && b > 0) out.push({ b, program: a.value });
+  });
+  return out;
+}
+function setInstrumentAt(score: Score, t: number, b: number, program: number | null) {
+  const bar = score.tracks[t]?.staves[0].bars[b];
+  if (!bar) return;
+  for (const v of bar.voices) for (const beat of v.beats) beat.automations = beat.automations.filter((a) => a.type !== M.AutomationType.Instrument);
+  const first = bar.voices[0]?.beats[0];
+  if (first && program !== null) first.automations.push(M.Automation.buildInstrumentAutomation(false, 0, Math.max(0, Math.min(127, program | 0))));
+}
+/** Al insertar o borrar compases, los cambios de efectos siguen a su compás. */
+function shiftFxChanges(score: Score, at: number, d: 1 | -1) {
+  const map = fxChanges(score);
+  if (!Object.keys(map).length) return;
+  for (const k of Object.keys(map)) map[Number(k)] = map[Number(k)].filter((c) => !(d < 0 && c.b === at)).map((c) => (c.b >= at + (d < 0 ? 1 : 0) ? { ...c, b: c.b + d } : c));
+  writeFxChanges(score, map);
 }
 
 // ---------- comentarios por compás y propuestas (viajan con la canción y con el dúo) ----------
@@ -415,6 +466,7 @@ function rebuildBars(score: Score, masterBars: at.model.MasterBar[], perStaff: M
 function insertBar(score: Score, atIndex: number) {
   const idx = Math.max(0, Math.min(atIndex, score.masterBars.length));
   shiftComments(score, idx, 1);
+  shiftFxChanges(score, idx, 1);
   const ref = score.masterBars[Math.max(0, idx - 1)];
   const mb = new M.MasterBar();
   if (ref) {
@@ -449,10 +501,31 @@ function insertBar(score: Score, atIndex: number) {
       per.set(st, list);
     }
   rebuildBars(score, mbs, per);
+  if (idx === 0) keepFirstInstrument(score, 1);
+}
+/** El sonido inicial de cada pista vive como automatización en el primer compás. Al insertar un compás
+ *  al inicio (from = 1) se regresa al nuevo primero; al borrar el primero (from = null) se rehace. */
+function keepFirstInstrument(score: Score, from: number | null) {
+  for (const tr of score.tracks) for (const st of tr.staves) {
+    const first = st.bars[0]?.voices[0]?.beats[0];
+    if (!first) continue;
+    if (from !== null) {
+      const src = st.bars[from];
+      for (const v of src?.voices ?? []) for (const beat of v.beats.slice(0, 1)) {
+        const moved = beat.automations.filter((a) => a.type === M.AutomationType.Instrument && a.ratioPosition === 0);
+        if (!moved.length) continue;
+        beat.automations = beat.automations.filter((a) => !moved.includes(a));
+        first.automations.push(...moved);
+      }
+    } else if (!first.automations.some((a) => a.type === M.AutomationType.Instrument)) {
+      first.automations.push(M.Automation.buildInstrumentAutomation(false, 0, tr.playbackInfo.program));
+    }
+  }
 }
 function deleteBar(score: Score, atIndex: number) {
   if (score.masterBars.length <= 1 || atIndex < 0 || atIndex >= score.masterBars.length) return;
   shiftComments(score, atIndex, -1);
+  shiftFxChanges(score, atIndex, -1);
   const mbs = score.masterBars.slice();
   const removed = mbs.splice(atIndex, 1)[0];
   // Si el compás borrado tenía el tempo inicial, se conserva en el siguiente.
@@ -466,6 +539,7 @@ function deleteBar(score: Score, atIndex: number) {
       per.set(st, list);
     }
   rebuildBars(score, mbs, per);
+  if (atIndex === 0) keepFirstInstrument(score, null);
 }
 /** Tempo vigente en un punto (compás y posición 0–1 dentro del compás). */
 export function tempoAt(score: Score, b: number, r = 0): number {
@@ -550,6 +624,15 @@ export function applyOp(score: Score, op: Op): Score {
     case "trackPaste": return pasteTrack(score, op.json, op.name);
     case "retune": retune(score, op.t, op.tuning); break;
     case "trackMeta": setMeta(score, op.t, op.meta); break;
+    case "instrumentAt": setInstrumentAt(score, op.t, op.b, op.program); break;
+    case "fxAt": {
+      const map = fxChanges(score);
+      const list = (map[op.t] ?? []).filter((c) => c.b !== op.b);
+      if (!op.del) list.push({ b: op.b, fx: op.fx });
+      map[op.t] = list.sort((a, b) => a.b - b.b);
+      writeFxChanges(score, map);
+      break;
+    }
     case "comment": {
       const list = comments(score).filter((c) => c.id !== (op.c?.id ?? op.del));
       if (op.c) list.push({ ...op.c, text: String(op.c.text).slice(0, 500) });
@@ -768,6 +851,8 @@ export function applyOp(score: Score, op: Op): Score {
         case "name": tr.name = String(v).slice(0, 60); tr.shortName = tr.name.slice(0, 10); break;
         case "program":
           tr.playbackInfo.program = Number(v);
+          // El sonido inicial también está escrito en el primer compás (así lo lee el MIDI).
+          for (const voice of st.bars[0]?.voices ?? []) for (const beat of voice.beats.slice(0, 1)) for (const a of beat.automations) if (a.type === M.AutomationType.Instrument) a.value = Number(v);
           if (tr.isPercussion) setMeta(score, op.t, { kit: Number(v) || undefined });
           break;
         case "tuning": if (Array.isArray(v) && v.length === st.tuning.length) st.stringTuning = new M.Tuning("", (v as number[]).slice(), false); break;
@@ -938,6 +1023,8 @@ function dupTrack(score: Score, t: number, empty: boolean): Score {
   remapTrackData(out, (i) => (i <= t ? i : i + 1));
   if (fx) { const m = fxMap(out); m[t + 1] = JSON.parse(JSON.stringify(fx)); writeFx(out, m); }
   if (meta) setMeta(out, t + 1, { ...meta, locked: undefined });
+  const fc = fxChanges(score)[t];
+  if (fc?.length) { const m = fxChanges(out); m[t + 1] = JSON.parse(JSON.stringify(fc)); writeFxChanges(out, m); }
   if (empty) for (const bar of out.tracks[t + 1].staves[0].bars) for (const v of bar.voices) for (const b of v.beats) for (const n of b.notes.slice()) b.removeNote(n);
   if (empty) finishScore(out);
   return out;

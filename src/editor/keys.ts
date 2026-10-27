@@ -45,6 +45,7 @@ export const KEY_HELP: KeyHelp[] = [
   { group: "Tocar y moverse", keys: "Inicio / Fin", what: "Principio / final de la canción" },
   { group: "Tocar y moverse", keys: "Ctrl + L", what: "Bucle de la selección o del compás (otra vez: quitarlo)" },
   { group: "Tocar y moverse", keys: "Ctrl + + / −", what: "Acercar / alejar la partitura (también pellizcando)" },
+  { group: "Ventanas", keys: "Ctrl + S", what: "Guardar ahora (también se guarda solo)" },
   { group: "Ventanas", keys: "Ctrl + M", what: "Menú" },
   { group: "Ventanas", keys: "Ctrl + E", what: "Secciones de la canción" },
   { group: "Ventanas", keys: "Ctrl + K", what: "Comentarios" },
@@ -53,7 +54,7 @@ export const KEY_HELP: KeyHelp[] = [
 ];
 /** Acciones de la app que los atajos piden (las pone main). */
 export interface KeyActions {
-  play(): void; menu(): void; help(): void; sections(): void; comments(): void;
+  play(): void; save(): void; menu(): void; help(): void; sections(): void; comments(): void;
   zoom(d: number): void; loop(): void; bar(d: number): void; track(d: number): void; edge(end: boolean): void;
 }
 
@@ -110,6 +111,7 @@ export class KeyInput {
     let handled = true;
     const mod = e.ctrlKey || e.metaKey, lk = k.toLowerCase(), A = this.actions;
     if (A && ((mod && k === " ") || k === "MediaPlayPause")) A.play();
+    else if (A && mod && lk === "s") A.save();
     else if (A && mod && k === "ArrowLeft") A.bar(-1);
     else if (A && mod && k === "ArrowRight") A.bar(1);
     else if (A && mod && k === "ArrowUp") A.track(-1);

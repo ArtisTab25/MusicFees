@@ -3,12 +3,12 @@ import { createClient, type RealtimeChannel, type SupabaseClient } from "@supaba
 import { Capacitor } from "@capacitor/core";
 import { ARTIFACT, NO_CLOUD_MSG, PUBLIC_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import type { Op } from "../score/model";
+import { delDoc, getDoc, putDoc } from "./vault";
 
 export interface SongRow { id: string; title: string; data: string; version: number; updated_at: string }
 export interface Peer { key: string; name: string; color: string; cursor?: { t: number; b: number; i: number; row: number } }
 
 const LOCAL_LIST = "mf:songs";
-const LOCAL_DOC = (id: string) => `mf:doc:${id}`;
 export const clientId = (() => {
   try {
     let id = localStorage.getItem("mf:client");
@@ -31,14 +31,11 @@ export function rememberSong(e: LocalEntry) {
 }
 export function forgetSong(id: string) {
   saveLocalList(localList().filter((x) => x.id !== id));
-  try { localStorage.removeItem(LOCAL_DOC(id)); } catch { /* nada */ }
+  void delDoc(id);
 }
-export function saveLocalDoc(id: string, json: string) {
-  try { localStorage.setItem(LOCAL_DOC(id), json); } catch { /* sin espacio: queda solo en la nube */ }
-}
-export function loadLocalDoc(id: string): string | null {
-  try { return localStorage.getItem(LOCAL_DOC(id)); } catch { return null; }
-}
+/** Guarda en el dispositivo (IndexedDB). Lanza error si no se pudo. */
+export const saveLocalDoc = (id: string, json: string) => putDoc(id, json);
+export const loadLocalDoc = (id: string) => getDoc(id);
 
 export interface Session { userId: string; email: string; username: string; isAdmin: boolean; provider: string }
 export interface UserRow { id: string; email: string; name: string; is_admin: boolean; created_at: string; last_sign_in_at: string | null; provider: string }

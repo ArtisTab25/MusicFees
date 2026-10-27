@@ -188,11 +188,16 @@ export async function exportAudio(api: at.AlphaTabApi, score: Score, format: "mp
     const soloOn = score.tracks.some((t) => t.playbackInfo.isSolo);
     const audible = score.tracks.filter((t) => !t.playbackInfo.isMute && (!soloOn || t.playbackInfo.isSolo));
     let mix: Float32Array | null = null;
+    const { fxChanges } = await import("../score/model");
+    const changes = fxChanges(score);
     for (const [n, t] of audible.entries()) {
       const step = `${n + 1}/${audible.length}: ${t.name}`;
       const dry = await renderTracks(api, score, sf, [t.index], false, (p) => onProgress(`Pista ${step}… ${p} %`));
       onProgress(`Efectos de ${t.name}…`);
-      const wet = await processTrack(dry, SR, fx[t.index] ?? null, t.playbackInfo.volume / 16 * 1.25);
+      const vol = t.playbackInfo.volume / 16 * 1.25;
+      const wet = changes[t.index]?.length
+        ? await processWithChanges(api, score, t.index, dry, vol, processTrack, (m) => onProgress(`${m} (${t.name})`))
+        : await processTrack(dry, SR, fx[t.index] ?? null, vol);
       if (opts.perTrack) await save(wet, t.name);
       else mix = mixInto(mix, wet);
     }
@@ -238,4 +243,76 @@ async function toMp3(inter: Float32Array, sr: number, kbps: number, prog: (p: nu
   }
   out.push(enc.flush().slice());
   return new Blob(out as BlobPart[]);
+}
+
+/**
+ * Pista que cambia de cadena de efectos en ciertos compases: se procesa el audio completo con cada
+ * cadena distinta y se arma el resultado por tramos (con un cruce de 25 ms en cada cambio).
+ */
+async function processWithChanges(api: at.AlphaTabApi, score: Score, t: number, dry: Float32Array, vol: number,
+  processTrack: (inter: Float32Array, sr: number, fx: import("../score/model").TrackFx | null, volume: number) => Promise<Float32Array>, say: (m: string) => void) {
+  const { fxAtBar } = await import("../score/model");
+  const { tickToSeconds } = await import("../player/engine");
+  // Inicio en segundos de cada compás tal como suena (con repeticiones).
+  const mf = new at.midi.MidiFile();
+  const gen = new at.midi.MidiFileGenerator(score, api.settings, new at.midi.AlphaSynthMidiFileHandler(mf, true));
+  gen.generate();
+  const toSec = tickToSeconds(mf);
+  const occ = gen.tickLookup.masterBars.map((m) => ({ bar: m.masterBar.index, sec: toSec(m.start) }));
+  const variants = new Map<string, { fx: import("../score/model").TrackFx | null; wet?: Float32Array }>();
+  const keyOf = occ.map((o) => { const fx = fxAtBar(score, t, o.bar); const k = JSON.stringify(fx); if (!variants.has(k)) variants.set(k, { fx }); return k; });
+  let i = 0;
+  for (const v of variants.values()) { say(`Cadena ${++i}/${variants.size}`); v.wet = await processTrack(dry, SR, v.fx, vol); }
+  const len = Math.max(...[...variants.values()].map((v) => v.wet!.length));
+  const out = new Float32Array(len), frames = len / 2, fade = Math.round(0.025 * SR);
+  for (let o = 0; o < occ.length; o++) {
+    const w = variants.get(keyOf[o])!.wet!;
+    const a = o === 0 ? 0 : Math.max(0, Math.round(occ[o].sec * SR) - fade);
+    const last = o === occ.length - 1;
+    const b = last ? frames : Math.min(frames, Math.round(occ[o + 1].sec * SR));
+    for (let f = a; f < b; f++) {
+      // Entrada suave al inicio del tramo (salvo el primero); el anterior ya se fue apagando aquí.
+      const gin = o > 0 && f < a + fade ? (f - a) / fade : 1;
+      const gout = !last && f >= b - fade ? (b - f) / fade : 1;
+      const g = Math.min(gin, gout);
+      if (f * 2 + 1 < w.length) { out[f * 2] += w[f * 2] * g; out[f * 2 + 1] += w[f * 2 + 1] * g; }
+    }
+  }
+  return out;
+}
+
+/**
+ * Congelar: cada pista de `tracks` se genera sin conexión con su cadena de efectos (y sus cambios por
+ * compás) y se suman en una sola mezcla estéreo intercalada, lista para tocarse sincronizada.
+ */
+export async function renderFrozenMix(api: at.AlphaTabApi, score: Score, soundFont: () => Promise<Uint8Array>, tracks: number[], onProgress: (msg: string) => void): Promise<{ data: Float32Array; sr: number }> {
+  const sf = await soundFont();
+  const { processTrack, mixInto, setOfflineLight } = await import("./studioExport");
+  const { lightAudio } = await import("../player/studio");
+  setOfflineLight(lightAudio()); // al congelar, la calidad del motor en vivo (en teléfonos: ligera, el doble de rápido)
+  try {
+  const { fxMap, fxChanges } = await import("../score/model");
+  const fx = fxMap(score), changes = fxChanges(score);
+  let mix: Float32Array | null = null;
+  // Las notas se generan una pista a la vez; los efectos de varias pistas se procesan al mismo tiempo
+  // (cada contexto sin conexión usa su propio hilo: en un teléfono de 8 núcleos va mucho más rápido).
+  const lanes = Math.max(1, Math.min(3, Math.floor((navigator.hardwareConcurrency || 2) / 2)));
+  const running = new Set<Promise<void>>();
+  let done = 0;
+  const say = () => onProgress(`Congelando… ${done}/${tracks.length} pistas listas`);
+  for (const [n, t] of tracks.entries()) {
+    const tr = score.tracks[t];
+    if (!tr) { done++; continue; }
+    const step = `${n + 1}/${tracks.length}: ${tr.name}`;
+    const dry = await renderTracks(api, score, sf, [t], false, (p) => onProgress(`Congelando ${step} (notas ${p} %) · ${done} listas`));
+    const vol = tr.playbackInfo.isMute ? 0 : tr.playbackInfo.volume / 16 * 1.25;
+    const job: Promise<void> = (changes[t]?.length ? processWithChanges(api, score, t, dry, vol, processTrack, () => {}) : processTrack(dry, SR, fx[t] ?? null, vol))
+      .then((wet) => { mix = mixInto(mix, wet); done++; say(); })
+      .finally(() => running.delete(job));
+    running.add(job);
+    if (running.size >= lanes) await Promise.race(running);
+  }
+  await Promise.all(running);
+  return { data: mix ?? new Float32Array(2), sr: SR };
+  } finally { setOfflineLight(false); }
 }

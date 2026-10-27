@@ -3,7 +3,7 @@ import * as at from "@coderline/alphatab";
 import { Engine } from "./player/engine";
 import { Editor } from "./editor/editor";
 import { KeyInput } from "./editor/keys";
-import { createSong, fromJson, toJson, finishScore, kindOf, fxMap, masterOf } from "./score/model";
+import { createSong, fromJson, toJson, finishScore, kindOf, fxMap, fxChanges, instrumentChanges, masterOf } from "./score/model";
 import { Cloud, LiveSession, clientId, loadLocalDoc, localList, rememberSong, saveLocalDoc, type Peer } from "./collab/cloud";
 import { ClaudeLibrary } from "./collab/claudeLib";
 import { addVersion, clearPending, markPending, pendingSince } from "./collab/vault";
@@ -13,7 +13,8 @@ import { Capacitor } from "@capacitor/core";
 import { buildPalettes } from "./ui/palettes";
 import { Sheets } from "./ui/sheets";
 import { midiName, pcName } from "./score/chords";
-import { DRUM_PIECES, LATIN_PIECES } from "./score/instruments";
+import { DRUM_PIECES, LATIN_PIECES, gmName } from "./score/instruments";
+import { FX_PRESETS } from "./player/fxPresets";
 import { BANKS, BUILTIN_URL, bankById, type Bank } from "./player/banks";
 import { downloadPack, getPack, hasPack } from "./player/downloads";
 import { adaptForAlphaTab } from "../scripts/sfadapt.mjs";
@@ -32,6 +33,7 @@ const btnSets = h("button", { class: "tab sets", "aria-label": "Ajustes de canci
 const btnLogo = h("button", { class: "logo", "aria-label": "Menú de MusicFees" }, h("img", { src: "./icons/icon-192.png", alt: "MusicFees" }));
 const titleEl = h("span", { class: "title" }, "Sin título");
 const syncEl = h("span", { class: "sync" }, "");
+const btnSave = h("button", { class: "savebtn", title: "Guardar ahora (Ctrl + S)", onclick: () => void saveNow() }, "✓ Guardado");
 const peersEl = h("span", { class: "peerdot" });
 const scoreEl = h("div", { id: "score" });
 const cursorEl = h("div", { id: "cursor", hidden: true });
@@ -47,7 +49,7 @@ const propBar = h("div", { class: "propbar", role: "status", hidden: true }, pro
 app.append(
   h("header", { class: "top" }, btnTracks, btnLogo, btnSets),
   propBar,
-  h("div", { class: "songline" }, titleEl, peersEl, syncEl),
+  h("div", { class: "songline" }, titleEl, peersEl, syncEl, btnSave),
   scoreWrap, paletteHost, tools,
 );
 const toastEl = h("div", { id: "toast", role: "status", hidden: true });
@@ -81,7 +83,7 @@ const lightAudioPref = () => PREFS.audioQuality === "light" || PREFS.saver === t
 /** Activa o apaga el motor con efectos. Usa el banco elegido, sin la adaptación para alphaTab. */
 async function setFx(on: boolean) {
   if (on === !!engine.fx) return;
-  if (!on) { engine.disableFx(); PREFS.fx = false; savePrefs(); refresh(); return; }
+  if (!on) { frozenInfo = null; engine.frozen.clear(); engine.disableFx(); PREFS.fx = false; savePrefs(); refresh(); return; }
   syncEl.textContent = "Preparando efectos…";
   try {
     const sf = bankOriginal ?? new Uint8Array(await (await fetch(BUILTIN_URL)).arrayBuffer());
@@ -251,12 +253,66 @@ const pinch = attachPinch(scoreWrap, scoreEl, {
 });
 function setSpeed(d: number) {
   engine.speed = Math.max(0.25, Math.min(2, Math.round((engine.speed + d) * 100) / 100));
+  // A otra velocidad las pistas congeladas cambiarían de tono: suenan en vivo mientras tanto.
+  if (frozenInfo) {
+    if (engine.speed !== 1 && engine.frozen.size) { engine.setFrozen([], null); toast("A otra velocidad las pistas congeladas suenan en vivo (para no cambiar de tono). Al volver a 100 % se congelan otra vez."); }
+    else if (engine.speed === 1 && !engine.frozen.size) engine.setFrozen(frozenInfo.tracks, frozenInfo.buf);
+  }
   refresh();
 }
+// ---------- congelar pistas (fluidez con muchas pistas y efectos) ----------
+let frozenInfo: { tracks: number[]; buf: AudioBuffer } | null = null;
+let freezing = false;
+async function freezeTracks(tracks: number[]) {
+  if (freezing || !tracks.length) return;
+  if (!engine.fx) await setFx(true);
+  if (!engine.fx) return;
+  if (engine.playing) engine.playPause();
+  freezing = true;
+  engine.setFrozen([], null); frozenInfo = null;
+  try {
+    const { renderFrozenMix } = await import("./export/exporters");
+    const sc = ed.score, soloOn = sc.tracks.some((t) => t.playbackInfo.isSolo);
+    const list = tracks.filter((t) => sc.tracks[t] && !(soloOn && !sc.tracks[t].playbackInfo.isSolo));
+    const { data, sr } = await renderFrozenMix(engine.api, sc, () => engine.soundFontBytes(), list, (m) => setSync(m));
+    const frames = Math.max(1, data.length / 2);
+    const buf = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: sr });
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    for (let i = 0; i < frames; i++) { L[i] = data[i * 2]; R[i] = data[i * 2 + 1]; }
+    frozenInfo = { tracks, buf };
+    if (engine.speed === 1) engine.setFrozen(tracks, buf);
+    toast(`❄ ${tracks.length} pista${tracks.length > 1 ? "s" : ""} congelada${tracks.length > 1 ? "s" : ""}: suenan igual y el teléfono trabaja mucho menos. Al editarlas se descongelan solas.`);
+  } catch (e) { toast(`No se pudo congelar: ${(e as Error).message}`, true); }
+  finally { freezing = false; setSync(); refresh(); }
+}
+function unfreeze(why = "") {
+  if (!frozenInfo && !engine.frozen.size) return;
+  frozenInfo = null;
+  engine.setFrozen([], null);
+  if (why) toast(`Las pistas congeladas volvieron a sonar en vivo: ${why}. Congélalas otra vez cuando termines.`);
+  refresh();
+}
+// Un cambio que toca una pista congelada (o a toda la canción) la descongela: su audio ya no serviría.
+const GLOBAL_OPS = new Set(["barIns", "barDel", "tempo", "load", "trackDel", "trackMove", "trackDup", "trackPaste", "setVoice"]);
+ed.onOps = (ops) => {
+  if (!frozenInfo) return;
+  const fr = new Set(frozenInfo.tracks);
+  if (!ops) { unfreeze("la canción cambió (deshacer o abrir otra)"); return; }
+  const hit = ops.find((o) => ["trackDel", "trackMove", "trackDup"].includes(o.k)
+    || GLOBAL_OPS.has(o.k) && !("t" in o && typeof o.t === "number" && !fr.has(o.t))
+    || (o.k === "barProp" && ["ts", "tempo", "repeatOpen", "repeatClose", "alternate"].includes(o.prop))
+    || (o.k === "songProp" && o.prop === "tempo")
+    || ("t" in o && typeof o.t === "number" && fr.has(o.t) && !(o.k === "trackMeta" || (o.k === "trackProp" && (o.prop === "name" || o.prop === "color")))));
+  if (hit) unfreeze(hit.k === "load" ? "la canción cambió" : "editaste una pista congelada o el tiempo de la canción");
+};
 function selectVoice(v: number) {
-  const bar = ed.bar;
+  const bar = ed.bar, before = ed.cursor.v;
   if (bar.voices.length <= v) ed.commit([{ k: "voices", t: ed.cursor.t, n: v + 1 }], { history: false });
   ed.setCursor({ v, i: 0 });
+  // Las demás voces se ven en gris: hay que volver a dibujar con la voz nueva resaltada.
+  if (before !== v) ed.rerender();
+  const used = ed.usedVoices();
+  toast(used.has(v) ? `Voz ${v + 1}: editas esta hoja; las demás se ven en gris y suenan igual.` : `Voz ${v + 1} vacía: escribe aquí otra parte que suena al mismo tiempo (ej. el bombo aparte de los platillos).`);
 }
 function jumpBar(d: number) {
   const n = ed.track.staves[0].bars.length;
@@ -349,8 +405,15 @@ function beatBox(t: number, b: number, v: number, i: number, row: number) {
   const bl = engine.bounds, sc = ed.score;
   const beat = sc.tracks[t]?.staves[0]?.bars[b]?.voices[v]?.beats[i];
   if (!bl || !beat) return null;
-  const list = bl.findBeats(beat);
-  if (!list?.length) return null;
+  let list = bl.findBeats(beat);
+  if (!list?.length) {
+    // Voz vacía: alphaTab no la dibuja; el cursor se pone al inicio del compás (ahí se escribe).
+    const other = sc.tracks[t].staves[0].bars[b].voices.find((x) => x !== beat.voice && x.beats.length && bl.findBeats(x.beats[0])?.length);
+    const ob = other ? bl.findBeats(other.beats[0]) : null;
+    if (!ob?.length) return null;
+    const bar = ob[0].barBounds.realBounds;
+    return { x: bar.x + 6, y: bar.y - 8, w: 30, h: bar.h + 16, col: true };
+  }
   const st = sc.tracks[t].staves[0], isTab = kindOf(sc.tracks[t]) === "tab" && st.showTablature;
   const bb = isTab ? list[list.length - 1] : list[0];
   const bar = bb.barBounds.realBounds, vb = bb.visualBounds;
@@ -390,7 +453,11 @@ scoreWrap.append(noteLayer);
 let notesKey = "";
 function drawComments(off: ReturnType<typeof surfaceOffset>) {
   const bl = engine.bounds, list = ed.comments.filter((c) => !c.done);
-  const key = `${list.map((c) => c.id + c.b).join()}|${off?.x},${off?.y}|${engine.api.settings.display.scale}|${bl ? (bl as unknown as { __mf?: number }).__mf ??= Math.random() : 0}`;
+  // Cambios de sonido o de efectos de la pista que estás editando, como etiquetas en su compás.
+  const t = ed.cursor.t;
+  const marks = [...instrumentChanges(ed.score, t).map((x) => ({ b: x.b, txt: `🎹 ${kindOf(ed.track) === "drums" ? "kit" : gmName(x.program)}` })),
+    ...(fxChanges(ed.score)[t] ?? []).map((x) => ({ b: x.b, txt: `🎛 ${x.fx ? (FX_PRESETS.find((p) => p.id === x.fx!.preset)?.name.split(" (")[0] ?? "efectos") : "sin efectos"}` }))];
+  const key = `${marks.map((m) => m.b + m.txt).join()}|${list.map((c) => c.id + c.b).join()}|${off?.x},${off?.y}|${engine.api.settings.display.scale}|${bl ? (bl as unknown as { __mf?: number }).__mf ??= Math.random() : 0}`;
   if (key === notesKey) return;
   notesKey = key;
   const byBar = new Map<number, number>();
@@ -401,6 +468,15 @@ function drawComments(off: ReturnType<typeof surfaceOffset>) {
     if (!mb) continue;
     const r = mb.visualBounds;
     out.push(h("button", { class: "cm-badge", style: `left:${off.x + r.x + r.w - 26}px;top:${off.y + r.y - 4}px`, "aria-label": `${n} comentario${n > 1 ? "s" : ""} en el compás ${b + 1}`, onclick: () => sheets.commentsSheet(b) }, `💬${n > 1 ? n : ""}`));
+  }
+  // Varios cambios en el mismo compás van en una sola etiqueta.
+  const byBarMarks = new Map<number, string[]>();
+  for (const m of marks) byBarMarks.set(m.b, [...(byBarMarks.get(m.b) ?? []), m.txt]);
+  if (off && bl) for (const m of [...byBarMarks].map(([b, txt]) => ({ b, txt: txt.join(" · ") }))) {
+    const mb = bl.findMasterBarByIndex(m.b);
+    if (!mb) continue;
+    const r = mb.visualBounds;
+    out.push(h("button", { class: "chg-badge", style: `left:${off.x + r.x + 2}px;top:${off.y + r.y - 18}px`, "aria-label": `Compás ${m.b + 1}: ${m.txt}`, onclick: () => { ed.gotoBar(m.b); sheets.sets("track"); } }, m.txt));
   }
   noteLayer.replaceChildren(...out);
 }
@@ -543,7 +619,15 @@ function refresh() {
   btnCount.setAttribute("aria-pressed", String(engine.countIn > 0));
   btnLoop.setAttribute("aria-pressed", String(engine.loop));
   btnMetro.setAttribute("aria-pressed", String(engine.metronome > 0));
-  for (const b of Array.from(voiceSeg.children)) b.setAttribute("aria-pressed", String(Number((b as HTMLElement).dataset.v) === ed.cursor.v));
+  {
+    const used = ed.usedVoices();
+    for (const b of Array.from(voiceSeg.children)) {
+      const v = Number((b as HTMLElement).dataset.v);
+      b.setAttribute("aria-pressed", String(v === ed.cursor.v));
+      b.classList.toggle("used", used.has(v));
+      b.setAttribute("aria-label", `Voz ${v + 1}${used.has(v) ? " (con notas)" : " (vacía)"}`);
+    }
+  }
   btnTracks.classList.toggle("live", !!live && live.others.length > 0);
   renderCtx();
   // La barra de selección vive en el teclado propio: se muestra sola mientras haya selección.
@@ -605,19 +689,33 @@ let savedAt = 0;
 function setSync(msg?: string, err = false) {
   syncEl.textContent = msg ?? (savedAt ? `✓ Guardado · ${placeLabel()}` : placeLabel());
   syncEl.classList.toggle("err", err);
-  syncEl.classList.toggle("dirty", msg === "● Sin guardar");
+  const dirty = msg === "● Sin guardar" || msg === "Guardando…";
+  syncEl.classList.toggle("dirty", dirty);
+  // El botón Guardar refleja el estado: resaltado si hay cambios, con palomita si ya está todo.
+  btnSave.classList.toggle("dirty", dirty || err);
+  btnSave.classList.toggle("err", err);
+  btnSave.textContent = msg === "Guardando…" ? "Guardando…" : err ? "⚠ Guardar" : dirty ? "💾 Guardar" : "✓ Guardado";
+  btnSave.setAttribute("aria-label", btnSave.textContent);
 }
 /** Guarda ya en el teléfono (y toma una versión automática cada 10 minutos de edición). */
 /** Lo que se guarda: en modo propuesta, la canción como estaba (lo propuesto no se guarda). */
 const savedJson = () => ed.proposal?.base ?? ed.json();
-function saveLocalNow() {
-  clearTimeout(saveLocalT);
+let localErr = false;
+async function saveLocalNow() {
+  clearTimeout(saveLocalT); saveLocalT = 0;
   if (!songId) return;
   const json = savedJson();
-  saveLocalDoc(songId, json);
-  rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
-  if (isCloud || isClaudeId(songId)) markPending(songId);
   const id = songId, title = ed.score.title || "Sin título";
+  try { await saveLocalDoc(id, json); localErr = false; }
+  catch {
+    // Antes esto fallaba en silencio; ahora se avisa (lo más común: el dispositivo sin espacio).
+    localErr = true;
+    setSync("⚠ No se pudo guardar en este dispositivo", true);
+    toast("No pude guardar en este dispositivo (¿sin espacio?). Exporta la canción o súbela a tu cuenta.", true);
+    return;
+  }
+  rememberSong({ id, title, updated: Date.now(), cloud: isCloud });
+  if (isCloud || isClaudeId(id)) markPending(id);
   void addVersion(id, title, json, "", true).then((made) => {
     // Las canciones de tu cuenta también guardan una versión en la nube, como mucho una por hora.
     if (!made || !isCloud || !cloud.session) return;
@@ -625,13 +723,25 @@ function saveLocalNow() {
     if (Date.now() - last < 3_600_000) return;
     void cloud.pushVersion(id, title, json, "", true).then((ok) => { if (ok) try { sessionStorage.setItem(`mf:cv:${id}`, String(Date.now())); } catch { /* nada */ } });
   }).catch(() => { /* sin IndexedDB */ });
-  if (!isCloud && !isClaudeId(songId)) { savedAt = Date.now(); setSync(); }
+  if (!isCloud && !isClaudeId(id)) { savedAt = Date.now(); setSync(); }
+}
+/** Botón Guardar (y Ctrl + S): guarda ya en el dispositivo y en la nube, sin esperar. */
+async function saveNow() {
+  if (!songId) return;
+  if (ed.proposal) { sheets.proposalsSheet(); return; }
+  setSync("Guardando…");
+  await saveLocalNow();
+  if (localErr) return;
+  if (isCloud && !(live && !live.isHost)) { clearTimeout(saveCloudT); saveCloudT = 0; try { await cloud.save(songId, ed.score.title, savedJson()); clearPending(songId); savedAt = Date.now(); } catch (e) { setSync((e as Error).message, true); toast(`Quedó guardada en este dispositivo; la nube falló: ${(e as Error).message}`, true); return; } }
+  if (isClaudeId(songId) && claudeLib) { clearTimeout(saveClaudeT); saveClaudeT = 0; try { await claudeLib.save(songId.slice(7), ed.score.title, savedJson()); clearPending(songId); savedAt = Date.now(); } catch (e) { setSync((e as Error).message, true); return; } }
+  savedAt = Date.now(); setSync();
+  toast(`✓ Guardada · ${placeLabel()}`);
 }
 ed.onDirty = () => {
   if (ed.proposal) { setSync("✎ Propuesta: se guarda al enviarla"); return; }
   setSync("● Sin guardar");
   clearTimeout(saveLocalT);
-  saveLocalT = window.setTimeout(() => { saveLocalT = 0; saveLocalNow(); }, 500);
+  saveLocalT = window.setTimeout(() => { saveLocalT = 0; void saveLocalNow(); }, 500);
   if (isCloud) scheduleCloudSave();
   if (isClaudeId(songId)) scheduleClaudeSave();
 };
@@ -662,7 +772,7 @@ function scheduleCloudSave(delay = 1500) {
 // Guardar al salir: cuando la app pasa a segundo plano (Android) o se cierra la pestaña.
 const flushSaves = () => {
   if (!saveLocalT && !saveCloudT && !saveClaudeT) return;
-  saveLocalNow();
+  void saveLocalNow();
   if (saveCloudT) scheduleCloudSave(0);
   if (saveClaudeT) scheduleClaudeSave(0);
 };
@@ -709,6 +819,7 @@ function startLive(id: string) {
   };
 }
 export async function openSong(id: string) {
+  sheets.leaveHome();
   flushSaves();
   let recovered = false;
   savedAt = 0;
@@ -725,7 +836,7 @@ export async function openSong(id: string) {
       if (row) json = row.data;
       else toast("No encontré esa canción en la nube.", true);
       // Recuperación: cambios que se guardaron en el teléfono pero no alcanzaron a subir.
-      const pend = pendingSince(id), local = loadLocalDoc(id);
+      const pend = pendingSince(id), local = await loadLocalDoc(id);
       if (row && pend && local && local !== row.data && pend > Date.parse(row.updated_at)) {
         json = local; recovered = true;
         toast("Recuperé cambios que no habían alcanzado a subir a la nube.");
@@ -735,7 +846,7 @@ export async function openSong(id: string) {
       setSync("Sin conexión con la nube", true);
     }
   }
-  json ??= loadLocalDoc(id);
+  json ??= await loadLocalDoc(id);
   if (json) ed.replaceScore(fromJson(json));
   location.hash = `#/s/${id}`;
   rememberSong({ id, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
@@ -756,7 +867,7 @@ export async function addSong(score: at.model.Score, toCloud = true) {
     else if (!ARTIFACT && cloud.session) id = await cloud.createMine(title, json);
     else if (!ARTIFACT && toCloud) id = await cloud.create(title, json);
   } catch (e) { toast(`${(e as Error).message} Quedó guardada en este dispositivo.`, true); }
-  saveLocalDoc(id, json);
+  await saveLocalDoc(id, json).catch(() => toast("No pude guardar en este dispositivo.", true));
   ed.replaceScore(score);
   ed.setCursor({ t: 0, b: 0, v: 0, i: 0, row: 0 });
   await openSong(id);
@@ -765,13 +876,25 @@ export async function addSong(score: at.model.Score, toCloud = true) {
 export async function newSong(styleId: string, title: string, bars: number, toCloud: boolean) {
   await addSong(createSong(styleId, bars, title), toCloud);
 }
+/** Al cerrar sesión: guarda lo pendiente, sale del dúo y deja una hoja en blanco (la canción privada
+ *  no se queda a la vista del siguiente que use el dispositivo). */
+export async function unloadSong() {
+  try { if (saveLocalT || saveCloudT || saveClaudeT) await saveNow(); } catch { /* lo que se pueda */ }
+  live?.close(); live = null; ed.outbox = null;
+  if (isCloud) { PREFS.last = null; savePrefs(); }
+  songId = null; isCloud = false; savedAt = 0;
+  ed.replaceScore(createSong("blank_gtr", 4, "Sin título"));
+  location.hash = "";
+  setSync(" ");
+  refresh();
+}
 export async function shareSong(): Promise<string | null> {
   if (!songId) return null;
   if (ARTIFACT) { toast(NO_CLOUD_MSG, true); return null; }
   if (!isCloud) {
     try {
       const id = await cloud.create(ed.score.title, toJson(ed.score));
-      saveLocalDoc(id, toJson(ed.score));
+      await saveLocalDoc(id, toJson(ed.score)).catch(() => {});
       await openSong(id);
     } catch (e) { toast((e as Error).message, true); return null; }
   }
@@ -784,7 +907,7 @@ export async function importScore(score: at.model.Score, name = "") {
   await addSong(score);
 }
 const who = () => cloud.session?.username || PREFS.name || "Músico";
-export const ctx = { who, ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
+export const ctx = { who, unloadSong, saveNow, freezeTracks, unfreeze: () => unfreeze(), get frozen() { return frozenInfo?.tracks ?? []; }, get freezing() { return freezing; }, freezeAll: () => freezeTracks(ed.score.tracks.map((t) => t.index)), __studioExport: () => import("./export/studioExport"), ed, engine, keys, cloud, claudeLib, addSong, setFx, toast, banks: BANKS, get bank() { return bank; }, setBank, hasPack, openSong, newSong, shareSong, importScore, refresh, prefs: PREFS, savePrefs, get songId() { return songId; }, get isCloud() { return isCloud; }, get live() { return live; } };
 const sheets = new Sheets(ctx);
 // Android: el regreso de Google entra a la app por su enlace propio.
 if (Capacitor.isNativePlatform()) void import("@capacitor/app").then(({ App }) => {
@@ -796,6 +919,7 @@ if (Capacitor.isNativePlatform()) void import("@capacitor/app").then(({ App }) =
 // Atajos de la app (teclado de computadora o tableta).
 keys.actions = {
   play: () => playBtn.click(),
+  save: () => void saveNow(),
   menu: () => sheets.menu(),
   help: () => sheets.help(),
   sections: () => sheets.sectionsSheet(),
@@ -822,25 +946,27 @@ document.body.classList.toggle("still", PREFS.still === true || matchMedia("(pre
 // ---------- arranque ----------
 async function boot() {
   const m = location.hash.match(/#\/s\/([\w-]+)/);
-  if (m) { await openSong(m[1]); return; } // enlace del dúo: abre directo, con o sin cuenta
+  // Enlace del dúo (canción en la nube): abre directo, con o sin cuenta. Una canción propia del
+  // dispositivo en la dirección (al recargar) se abre y se muestra Inicio con «Continuar».
+  if (m && !m[1].startsWith("local-") && !m[1].startsWith("claude-")) { await openSong(m[1]); return; }
+  if (m) await openSong(m[1]);
   const last = PREFS.last && localList().find((e) => e.id === PREFS.last);
-  if (last) await openSong(last.id);
+  if (m) { /* ya abierta */ } else if (last) await openSong(last.id);
   else {
     // Primera vez: hoja en blanco en el dispositivo, lista para escribir.
     const id = `local-${crypto.randomUUID()}`;
     ed.score.title = "Mi primera canción";
-    saveLocalDoc(id, toJson(ed.score));
+    await saveLocalDoc(id, toJson(ed.score)).catch(() => {});
     await openSong(id);
   }
   // Web y APK: pide entrar (se puede seguir sin cuenta). Artefacto: la cuenta de Claude basta.
   await cloud.ready; // sesión guardada, o la que trae la vuelta de Google
   cloud.onSession = (s) => {
     setSync();
-    if (s && document.querySelector('.sheet form.login')) { sheets.close(); toast(`Hola, ${s.username}.`); sheets.library(); }
+    if (s && document.querySelector('.sheet form.login')) { toast(`Hola, ${s.username}.`); sheets.home(); }
   };
-  if (!ARTIFACT && !cloud.session && !PREFS.offline) sheets.login(true);
-  else if (!last) sheets.library();
-  else toast(inputMode === "pad" ? "Toca la tablatura y escribe con el teclado de abajo. → avanza." : "Toca la tablatura y escribe trastes con tu teclado. Espacio avanza.");
+  const next = () => { if (!ARTIFACT && !cloud.session && !PREFS.offline) sheets.login(true); else sheets.home(); };
+  if (!sheets.legalAccepted) sheets.legalGate(next); else next();
 }
 window.addEventListener("hashchange", () => {
   const m = location.hash.match(/#\/s\/([\w-]+)/);

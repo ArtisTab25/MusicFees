@@ -412,3 +412,33 @@ test("comentarios siguen a su compás y las propuestas viajan con la canción", 
   applyOp(back, { k: "proposal", del: "p1" });
   assert.equal(M2.proposals(back).length, 0);
 });
+
+test("cambios dentro de la pista: sonido y efectos desde un compás", async () => {
+  const M2 = await import("../src/score/model");
+  const s = createSong("blank_gtr", 6, "Cambios");
+  applyOp(s, { k: "trackProp", t: 0, prop: "program", val: 0 }); // la tablatura suena a piano
+  applyOp(s, { k: "instrumentAt", t: 0, b: 3, program: 33 });
+  applyOp(s, { k: "trackFx", t: 0, fx: { preset: "clean", drive: 0, low: 0, mid: 0, high: 0, comp: 0, chorus: 0, delay: 0, reverb: 2 } });
+  applyOp(s, { k: "fxAt", t: 0, b: 2, fx: { preset: "metal", drive: 9, low: 0, mid: 0, high: 0, comp: 3, chorus: 0, delay: 0, reverb: 1 } });
+  finishScore(s);
+  assert.equal(s.tracks[0].playbackInfo.program, 0);
+  assert.deepEqual(M2.instrumentChanges(s, 0), [{ b: 3, program: 33 }]);
+  assert.equal(M2.fxAtBar(s, 0, 1)?.preset, "clean");
+  assert.equal(M2.fxAtBar(s, 0, 4)?.preset, "metal");
+  // El MIDI trae el cambio de programa en el compás 4
+  const mf = new at.midi.MidiFile();
+  new at.midi.MidiFileGenerator(s, settings, new at.midi.AlphaSynthMidiFileHandler(mf, true)).generate();
+  const progs = mf.tracks.flatMap((t) => t.events).filter((e) => (e as unknown as { type: number }).type === 0xc0 || e.constructor.name.includes("Program")).map((e) => (e as unknown as { program: number }).program);
+  assert.ok(progs.includes(33), `programas: ${progs}`);
+  // Insertar un compás antes mueve el cambio de efectos; los del sonido viajan con su compás
+  applyOp(s, { k: "barIns", at: 0 }); finishScore(s);
+  assert.equal(M2.fxChanges(s)[0][0].b, 3);
+  assert.deepEqual(M2.instrumentChanges(s, 0), [{ b: 4, program: 33 }]);
+  // Duplicar la pista copia sus cambios; sobrevive a JSON
+  const s2 = applyOp(s, { k: "trackDup", t: 0 }); finishScore(s2);
+  assert.equal(M2.fxChanges(s2)[1][0].fx?.preset, "metal");
+  const back = fromJson(toJson(s2));
+  assert.equal(M2.fxAtBar(back, 1, 5)?.preset, "metal");
+  applyOp(back, { k: "fxAt", t: 0, b: 3, fx: null, del: true });
+  assert.equal(M2.fxAtBar(back, 0, 5)?.preset, "clean");
+});

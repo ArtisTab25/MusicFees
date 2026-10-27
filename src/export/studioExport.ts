@@ -8,6 +8,9 @@ import { createPlugin } from "../player/wam";
 
 const TAIL = 3; // segundos extra para que se apaguen delay y reverb
 
+/** Calidad del procesamiento sin conexión: alta al exportar; al congelar, la misma que en vivo (más rápido). */
+let offlineLight = false;
+export function setOfflineLight(v: boolean) { offlineLight = v; }
 async function run(inter: Float32Array, sr: number, tail: number, build: (ctx: Tone.OfflineContext, input: Tone.ToneAudioNode) => Promise<void>) {
   const frames = inter.length / 2;
   // Contexto sin conexión nativo (los plugins WAM no funcionan con la envoltura de Tone).
@@ -18,7 +21,7 @@ async function run(inter: Float32Array, sr: number, tail: number, build: (ctx: T
   const input = new Tone.Gain({ context: ctx });
   // Exportar siempre en calidad completa (no en tiempo real: no hay riesgo de cortes).
   const light = lightAudio();
-  setLightAudio(false);
+  setLightAudio(offlineLight);
   try { await build(ctx, input); } finally { setLightAudio(light); }
   const src = ctx.createBufferSource();
   src.buffer = buf;

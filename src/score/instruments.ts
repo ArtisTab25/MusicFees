@@ -206,3 +206,24 @@ export const STYLES: StyleTemplate[] = [
   { id: "baroque", name: "Barroco", era: "1600–1750", tempo: 88, tracks: [{ preset: "harpsichord", name: "Clavecín" }, { preset: "violin", name: "Violín" }, { preset: "cello", name: "Chelo" }] },
 ];
 export const styleById = (id: string) => STYLES.find((s) => s.id === id);
+
+/** Los 128 sonidos General MIDI (los bancos de MusicFees los traen todos). */
+export const GM_NAMES: string[] = [
+  "Piano de cola", "Piano brillante", "Piano eléctrico de cola", "Piano de cantina", "Piano eléctrico (Rhodes)", "Piano eléctrico (FM)", "Clavecín", "Clavinet",
+  "Celesta", "Glockenspiel", "Caja de música", "Vibráfono", "Marimba", "Xilófono", "Campanas tubulares", "Dulcimer",
+  "Órgano de barras", "Órgano percusivo", "Órgano de rock", "Órgano de iglesia", "Armonio", "Acordeón", "Armónica", "Bandoneón",
+  "Guitarra de nylon", "Guitarra acústica", "Guitarra de jazz", "Eléctrica limpia", "Eléctrica apagada", "Eléctrica con overdrive", "Eléctrica distorsionada", "Armónicos de guitarra",
+  "Bajo acústico", "Bajo eléctrico (dedos)", "Bajo eléctrico (púa)", "Bajo sin trastes", "Bajo slap 1", "Bajo slap 2", "Bajo sintetizado 1", "Bajo sintetizado 2",
+  "Violín", "Viola", "Violonchelo", "Contrabajo", "Cuerdas en trémolo", "Cuerdas pizzicato", "Arpa", "Timbales sinfónicos",
+  "Ensamble de cuerdas 1", "Ensamble de cuerdas 2", "Cuerdas sintetizadas 1", "Cuerdas sintetizadas 2", "Coro «aah»", "Voz «ooh»", "Voz sintetizada", "Golpe de orquesta",
+  "Trompeta", "Trombón", "Tuba", "Trompeta con sordina", "Corno francés", "Sección de metales", "Metales sintetizados 1", "Metales sintetizados 2",
+  "Saxofón soprano", "Saxofón alto", "Saxofón tenor", "Saxofón barítono", "Oboe", "Corno inglés", "Fagot", "Clarinete",
+  "Flautín", "Flauta", "Flauta dulce", "Flauta de pan", "Botella soplada", "Shakuhachi", "Silbido", "Ocarina",
+  "Sinte: onda cuadrada", "Sinte: diente de sierra", "Sinte: calíope", "Sinte: chiff", "Sinte: charango", "Sinte: voz", "Sinte: quintas", "Sinte: bajo y lead",
+  "Pad: new age", "Pad: cálido", "Pad: polisintetizador", "Pad: coro", "Pad: arco", "Pad: metálico", "Pad: halo", "Pad: barrido",
+  "FX: lluvia", "FX: banda sonora", "FX: cristal", "FX: atmósfera", "FX: brillo", "FX: duendes", "FX: ecos", "FX: ciencia ficción",
+  "Sitar", "Banjo", "Shamisen", "Koto", "Kalimba", "Gaita", "Violín folk", "Shehnai",
+  "Campanita", "Agogó", "Tambores metálicos (steel drum)", "Caja china", "Taiko", "Tom melódico", "Tambor sintetizado", "Platillo al revés",
+  "Ruido de traste", "Respiración", "Mar", "Pájaro", "Teléfono", "Helicóptero", "Aplausos", "Disparo",
+];
+export const gmName = (p: number) => GM_NAMES[p] ?? `Sonido ${p}`;

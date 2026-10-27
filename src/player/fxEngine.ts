@@ -221,8 +221,36 @@ export class FxEngine {
     // La música entra ~15 ms después de la orden (mensaje al hilo de audio), medido con un analizador.
     this.anchor = { ctx: this.ctx.currentTime + 0.015, song: t1 };
     this.startClicks();
+    this.startFrozen();
   }
+  // ---------- pistas congeladas ----------
+  // Las pistas congeladas ya vienen mezcladas con sus efectos en un solo audio: se tocan como una
+  // grabación, sincronizada con la canción, y su MIDI no se manda al sintetizador. Así 10 pistas con
+  // cadenas pesadas cuestan lo mismo que una.
+  private frozen: AudioBuffer | null = null;
+  private frozenSrc: AudioBufferSourceNode | null = null;
+  private frozenGain: GainNode | null = null;
+  setFrozen(buf: AudioBuffer | null) {
+    this.stopFrozen();
+    this.frozen = buf;
+    if (buf && !this.frozenGain) { this.frozenGain = this.native.createGain(); Tone.connect(this.frozenGain, this.master.input); }
+    if (buf && this.anchor && !this.seq.paused) this.startFrozen();
+  }
+  private startFrozen() {
+    this.stopFrozen();
+    if (!this.frozen || !this.anchor || !this.frozenGain) return;
+    const src = this.native.createBufferSource();
+    src.buffer = this.frozen;
+    src.playbackRate.value = this.seq.playbackRate || 1;
+    src.connect(this.frozenGain);
+    const at = Math.max(this.native.currentTime, this.anchor.ctx);
+    const off = Math.max(0, this.anchor.song + (at - this.anchor.ctx) * (this.seq.playbackRate || 1));
+    if (off < this.frozen.duration) src.start(at, off);
+    this.frozenSrc = src;
+  }
+  private stopFrozen() { try { this.frozenSrc?.stop(); } catch { /* ya parado */ } this.frozenSrc?.disconnect(); this.frozenSrc = null; }
   pause() {
+    this.stopFrozen();
     this.playId++;
     if (!this.counting && this.anchor) this.target = this.songNow;
     this.counting = false;
@@ -231,7 +259,7 @@ export class FxEngine {
   seek(ms: number) {
     this.target = Math.max(0, ms / 1000);
     this.seq.currentTime = this.target;
-    if (this.anchor) this.anchor = { ctx: this.ctx.currentTime, song: this.target };
+    if (this.anchor) { this.anchor = { ctx: this.ctx.currentTime, song: this.target }; this.startFrozen(); }
     this.nextBeat = -1;
   }
   private click(at: number, down: boolean, vol = this.metronome) {
@@ -266,6 +294,7 @@ export class FxEngine {
     if (!this.seq) return;
     if (this.anchor) this.anchor = { ctx: this.ctx.currentTime, song: this.songNow };
     this.seq.playbackRate = r;
+    if (this.anchor) this.startFrozen();
   }
   set volume(v: number) { this.master.output.gain.value = v; }
   /** Toca una nota suelta (al escribir) por el canal de la pista, con sus efectos. */

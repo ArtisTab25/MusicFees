@@ -2,7 +2,7 @@
 // localStorage). Las versiones se toman solas cada 10 minutos de edición, o cuando el usuario pide.
 // La papelera guarda la canción completa durante 30 días antes de borrarla de verdad.
 
-const DB = "musicfees", STORE_V = "versions", STORE_T = "trash";
+const DB = "musicfees", STORE_V = "versions", STORE_T = "trash", STORE_D = "docs";
 const KEEP_VERSIONS = 20, AUTO_EVERY = 10 * 60_000, TRASH_DAYS = 30;
 
 export interface Version { id: string; song: string; t: number; title: string; label: string; auto: boolean; json: string }
@@ -11,11 +11,12 @@ export interface TrashItem { id: string; song: string; t: number; title: string;
 let dbp: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
   dbp ??= new Promise((res, rej) => {
-    const r = indexedDB.open(DB, 1);
+    const r = indexedDB.open(DB, 2);
     r.onupgradeneeded = () => {
       const d = r.result;
       if (!d.objectStoreNames.contains(STORE_V)) d.createObjectStore(STORE_V, { keyPath: "id" }).createIndex("song", "song");
       if (!d.objectStoreNames.contains(STORE_T)) d.createObjectStore(STORE_T, { keyPath: "id" });
+      if (!d.objectStoreNames.contains(STORE_D)) d.createObjectStore(STORE_D, { keyPath: "id" });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -85,3 +86,47 @@ export function setLibMeta(id: string, m: LibMeta) {
 }
 /** Texto «Carpeta, etiqueta1, etiqueta2» → partes. */
 export const parseTags = (s: string) => s.split(/[,#]/).map((x) => x.trim()).filter(Boolean);
+
+// ---------- canciones guardadas en el dispositivo ----------
+// Antes iban en localStorage, que solo admite ~5 MB en total: con canciones de 10 pistas se llenaba y
+// el guardado fallaba en silencio. Ahora van en IndexedDB (cientos de MB) y comprimidas con gzip
+// (una canción de Guitar Pro ocupa ~10 veces menos).
+interface DocRow { id: string; t: number; gz: boolean; data: Blob | string }
+const canGzip = typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined";
+async function gzip(text: string): Promise<Blob> {
+  return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+}
+async function gunzip(b: Blob): Promise<string> {
+  return new Response(b.stream().pipeThrough(new DecompressionStream("gzip"))).text();
+}
+const LS_DOC = (id: string) => `mf:doc:${id}`;
+const memo = new Map<string, string>(); // última versión de cada canción (lecturas rápidas)
+/** Guarda la canción en el dispositivo. Lanza un error si no se pudo (para avisar de verdad). */
+export async function putDoc(id: string, json: string): Promise<void> {
+  memo.set(id, json);
+  const row: DocRow = { id, t: Date.now(), gz: canGzip, data: canGzip ? await gzip(json) : json };
+  await tx(STORE_D, "readwrite", (s) => { s.put(row); });
+  try { localStorage.removeItem(LS_DOC(id)); } catch { /* nada */ }
+}
+export async function getDoc(id: string): Promise<string | null> {
+  const m = memo.get(id);
+  if (m) return m;
+  try {
+    const row = await tx<DocRow>(STORE_D, "readonly", (s) => s.get(id));
+    if (row) { const json = row.gz ? await gunzip(row.data as Blob) : (row.data as string); memo.set(id, json); return json; }
+  } catch { /* sin IndexedDB */ }
+  // Canciones guardadas por versiones anteriores: se pasan a IndexedDB al leerlas.
+  let old: string | null = null;
+  try { old = localStorage.getItem(LS_DOC(id)); } catch { /* nada */ }
+  if (old) void putDoc(id, old).catch(() => {});
+  return old;
+}
+export async function delDoc(id: string) {
+  memo.delete(id);
+  try { localStorage.removeItem(LS_DOC(id)); } catch { /* nada */ }
+  await tx(STORE_D, "readwrite", (s) => { s.delete(id); }).catch(() => {});
+}
+/** Espacio usado y disponible en el dispositivo (MB), si el navegador lo informa. */
+export async function storageInfo(): Promise<{ used: number; quota: number } | null> {
+  try { const e = await navigator.storage?.estimate(); return e ? { used: (e.usage ?? 0) / 1048576, quota: (e.quota ?? 0) / 1048576 } : null; } catch { return null; }
+}
