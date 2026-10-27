@@ -41,7 +41,7 @@ jobs:
       - name: Compilar APK firmado
         env:
           MF_VERSION_CODE: ${{ github.run_number }}
-          MF_VERSION_NAME: 0.7.${{ github.run_number }}
+          MF_VERSION_NAME: 0.8.${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew

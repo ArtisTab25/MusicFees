@@ -109,11 +109,20 @@ export class Engine {
     for (const fn of this.listeners[k] ?? []) (fn as (...a: unknown[]) => void)(...args);
   }
 
-  render(score: Score, tracks: number[]) {
+  /** alphaTab solo regenera el MIDI cuando cambia el objeto de la canción; las ediciones lo modifican
+   *  en el lugar, así que sin esto lo escrito no sonaba hasta reabrir la canción. Se regenera una vez,
+   *  al darle play (no en cada tecla: en el teléfono eso pesaba). */
+  private midiDirty = false;
+  render(score: Score, tracks: number[], fromBar?: number) {
+    const same = score === this.score;
+    if (same) this.midiDirty = true;
     this.score = score;
+    const prev = this.tracks.join();
     this.tracks = tracks.filter((t) => t >= 0 && t < score.tracks.length);
     if (!this.tracks.length) this.tracks = [0];
-    this.api.renderScore(score, this.tracks);
+    // Misma canción y mismas pistas: alphaTab rehace solo desde el renglón del compás cambiado.
+    const partial = same && fromBar !== undefined && prev === this.tracks.join();
+    this.api.renderScore(score, this.tracks, partial ? { firstChangedMasterBar: fromBar, reuseViewport: true } : undefined);
   }
   /** Cambia de banco de sonidos sin recargar la canción. */
   setSoundFont(source: string | Uint8Array) {
@@ -201,7 +210,19 @@ export class Engine {
   get bounds() {
     return this.api.boundsLookup;
   }
-  playPause() { this.api.playPause(); }
+  playPause() {
+    if (this.playing || !this.midiDirty) { this.api.playPause(); return; }
+    this.midiDirty = false;
+    // Espera a que el reproductor tenga el MIDI nuevo. El aviso puede llegar al registrarse (estado
+    // anterior): solo cuenta después de pedir la recarga.
+    let armed = false, done = false, t = 0;
+    let off: (() => void) | null = null;
+    const go = () => { if (!armed || done) return; done = true; off?.(); clearTimeout(t); this.reseek(); this.api.play(); };
+    off = this.api.playerReady.on(go) as unknown as () => void;
+    armed = true;
+    t = window.setTimeout(go, 1500);
+    this.api.loadMidiForScore();
+  }
   stop() { this.api.stop(); }
   set speed(v: number) { this.api.playbackSpeed = v; }
   get speed() { return this.api.playbackSpeed; }
@@ -238,6 +259,12 @@ export class Engine {
       return;
     }
     if (this.soundReady && !this.playing) try { this.api.playNote(note); } catch { /* sin sonido */ }
+  }
+  /** Lleva al motor de estudio los efectos y el masterizado guardados en la canción. */
+  syncFx(score: Score) {
+    if (!this.fx) return;
+    this.fx.route(this.fxTracks());
+    this.fx.setMaster(masterOf(score));
   }
   syncMix(score: Score) {
     if (this.fx) { this.fx.route(this.fxTracks()); return; }

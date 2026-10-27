@@ -364,7 +364,7 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 0.7 y licencias", () => this.about()),
+        item("Acerca de MusicFees", "Versión 0.8 y licencias", () => this.about()),
       ],
     };
     body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
@@ -715,24 +715,60 @@ export class Sheets {
   private async pluginWindow(t: number, k: number) {
     const { ed, engine } = this.c;
     const inst = engine.fx?.pluginInstances(t)[k];
-    if (!inst) { this.c.toast("El plugin todavía está cargando. Intenta en un momento.", true); return; }
-    let gui: HTMLElement;
-    try { gui = await inst.createGui(); } catch (e) { this.c.toast(`El plugin no tiene interfaz: ${(e as Error).message}`, true); return; }
+    if (!inst) {
+      const err = engine.fx?.pluginErrors.get(t);
+      this.c.toast(err ?? (engine.fx ? "El plugin todavía está cargando. Intenta en un momento." : "Activa el motor de estudio para usar plugins."), true);
+      return;
+    }
     const ref = fxMap(ed.score)[t]?.plugins?.[k];
+    const node = inst.audioNode as unknown as WamParamNode;
+    // Controles propios: deslizadores grandes que funcionan igual con el dedo, sin depender de la
+    // ventana original del plugin (hecha para ratón y pantalla grande).
+    let params: [string, WamParamInfo][] = [];
+    try { params = Object.entries(await node.getParameterInfo()).filter(([id, p]) => usableParam(id, p)); } catch { /* sin lista */ }
+    let values: Record<string, { value: number }> = {};
+    try { values = await node.getParameterValues(false); } catch { /* sin valores */ }
+    const sliders = h("div", { class: "plugparams" }, params.length ? params.map(([id, p]) => {
+      const steps = p.type === "int" || p.type === "boolean" || p.choices?.length ? 1 : (p.maxValue - p.minValue) / 200;
+      const v = values[id]?.value ?? p.defaultValue;
+      const out = h("output", null, fmtParam(v, p));
+      const r = h("input", { type: "range", min: p.minValue, max: p.maxValue, step: steps, value: v, "aria-label": paramLabel(id, p) });
+      r.oninput = () => { const x = Number(r.value); out.textContent = fmtParam(x, p); void node.setParameterValues({ [id]: { id, value: x, normalized: false } }); };
+      return h("label", { class: "plugparam" }, h("span", null, paramLabel(id, p)), r, out);
+    }) : [h("p", { class: "note" }, "Este plugin no publica sus controles; usa su vista original.")]);
+    let gui: HTMLElement | null = null;
+    const original = h("div", { class: "plugbody" });
+    const showOriginal = async () => {
+      if (!gui) {
+        try { gui = await inst.createGui(); original.append(gui); }
+        catch (e) { original.append(h("p", { class: "note" }, `Sin vista original: ${(e as Error).message}`)); }
+      }
+    };
+    const coarse = matchMedia("(pointer: coarse)").matches;
+    const tabs = h("div", { class: "menu-tabs" });
+    const body = h("div", { class: "plugview" });
+    const show = async (which: "controls" | "original") => {
+      tabs.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === which)));
+      if (which === "original") { await showOriginal(); body.replaceChildren(original); }
+      else body.replaceChildren(sliders);
+    };
+    tabs.append(h("button", { "data-v": "controls", onclick: () => show("controls") }, "Controles"), h("button", { "data-v": "original", onclick: () => show("original") }, "Vista del plugin"));
     const close = async () => {
       try {
         const state = await inst.audioNode.getState();
         const fx = fxMap(ed.score)[t];
         if (fx?.plugins?.[k]) ed.commit([{ k: "trackFx", t, fx: { ...fx, plugins: fx.plugins.map((p, j) => (j === k ? { ...p, state } : p)) } }], { render: false });
       } catch { /* sin estado */ }
-      try { inst.destroyGui?.(gui); } catch { /* nada */ }
+      try { if (gui) inst.destroyGui?.(gui); } catch { /* nada */ }
       win.remove();
     };
     const win = h("div", { class: "plugwin", role: "dialog", "aria-label": ref?.name ?? "Plugin" },
       h("div", { class: "plugcard" },
         h("header", null, h("h2", null, ref?.name ?? "Plugin"), h("button", { class: "ibtn", "aria-label": "Cerrar y guardar", onclick: close }, icon("close", 20))),
-        h("div", { class: "plugbody" }, gui)));
+        tabs, body));
     document.body.append(win);
+    // En el teléfono abre en los controles propios; en computadora, en la vista del plugin.
+    await show(coarse || !params.length ? (params.length ? "controls" : "original") : "original");
   }
 
   // ---------- masterizado ----------
@@ -880,7 +916,29 @@ export class Sheets {
   }
   about() {
     this.open("Acerca de MusicFees", "full",
-      h("p", null, "MusicFees 0.7 — tablaturas y partituras multipista con edición en dúo."),
+      h("p", null, "MusicFees 0.8 — tablaturas y partituras multipista con edición en dúo."),
       h("p", { class: "note" }, "Partitura y reproducción: alphaTab (MPL-2.0). Fuente musical: Bravura (SIL OFL). Sonidos: MuseScore General de S. Christian Collins, basado en Fluid R3 de Frank Wen y Michael Cowgill (licencia MIT), y GeneralUser GS de S. Christian Collins (uso libre, también comercial). Motor de estudio: spessasynth_lib (Apache-2.0) y Tone.js (MIT). Nube: Supabase."));
   }
+}
+
+// ---------- parámetros de plugins WAM ----------
+interface WamParamInfo { label?: string; type?: string; minValue: number; maxValue: number; defaultValue: number; choices?: string[]; units?: string }
+interface WamParamNode {
+  getParameterInfo(): Promise<Record<string, WamParamInfo>>;
+  getParameterValues(normalized?: boolean): Promise<Record<string, { value: number }>>;
+  setParameterValues(v: Record<string, { id: string; value: number; normalized: boolean }>): Promise<void>;
+}
+/** Deja fuera parámetros internos: «bypass» y los de rango ilimitado (no se pueden mover con un deslizador). */
+function usableParam(id: string, p: WamParamInfo) {
+  if (/bypass/i.test(id)) return false;
+  return Number.isFinite(p.minValue) && Number.isFinite(p.maxValue) && p.maxValue > p.minValue && p.maxValue - p.minValue < 1e6;
+}
+function paramLabel(id: string, p: WamParamInfo) {
+  const raw = (p.label && p.label !== id ? p.label : id).split("/").filter(Boolean).pop() ?? id;
+  return raw.replace(/^\d+_/, "").replace(/[_-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
+}
+function fmtParam(v: number, p: WamParamInfo) {
+  if (p.choices?.length) return p.choices[Math.round(v)] ?? String(v);
+  const span = p.maxValue - p.minValue;
+  return (span <= 2 ? v.toFixed(2) : span <= 50 ? v.toFixed(1) : String(Math.round(v))) + (p.units ? ` ${p.units}` : "");
 }

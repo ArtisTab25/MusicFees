@@ -35,6 +35,29 @@ export class Editor {
   constructor(score: Score, public engine: Engine) {
     this.score = score;
   }
+
+  // ---------- JSON de la canción (historial y guardado) ----------
+  // Pasar la canción completa a JSON es lo más caro de cada tecla (medido: ~200 ms por tecla en
+  // computadora, ~850 ms en un teléfono). Se calcula una vez por estado, en un momento libre, y lo
+  // reusan deshacer, el guardado local, la nube y el dúo.
+  private cleanJson: string | null = null;
+  /** Hay cambios del usuario cuyo estado aún no se pasó a JSON (está escribiendo seguido). */
+  private unsnapped = false;
+  private snapT = 0;
+  /** La canción actual en JSON (usa la copia ya calculada si la hay). */
+  json(): string {
+    if (this.cleanJson === null) { this.cleanJson = toJson(this.score); this.unsnapped = false; }
+    return this.cleanJson;
+  }
+  private changed(byUser: boolean) {
+    this.cleanJson = null;
+    this.unsnapped = byUser;
+    clearTimeout(this.snapT);
+    this.snapT = window.setTimeout(() => {
+      const idle = (window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+      if (idle) idle(() => this.json(), { timeout: 1500 }); else this.json();
+    }, 350);
+  }
   onChange(fn: Listener) { this.listeners.push(fn); }
   emit() { for (const fn of this.listeners) fn(); }
 
@@ -61,44 +84,56 @@ export class Editor {
   commit(ops: Op[], opts: { history?: boolean; render?: boolean } = {}) {
     if (!ops.length) return;
     if (opts.history !== false) {
-      this.undoStack.push(toJson(this.score));
-      if (this.undoStack.length > 60) this.undoStack.shift();
+      // Si lo anterior todavía no se pasó a JSON es que se está escribiendo seguido: esos cambios
+      // se deshacen juntos (el paso anterior del historial ya guarda cómo estaba antes).
+      if (this.cleanJson !== null || !this.unsnapped) {
+        this.undoStack.push(this.json());
+        if (this.undoStack.length > 60) this.undoStack.shift();
+      }
       this.redoStack.length = 0;
     }
     for (const op of ops) this.score = applyOp(this.score, op);
     finishScore(this.score);
+    this.changed(true);
     this.clampCursor();
     this.outbox?.(ops);
     this.onDirty?.();
-    if (opts.render !== false) this.rerender();
+    if (opts.render !== false) this.rerender(firstBar(ops));
+    // Efectos y masterizado no cambian el dibujo: se aplican directo al motor de estudio
+    // (antes, deshacer o un cambio guardado sin redibujar no llegaba a sonar).
+    if (ops.some((o) => o.k === "trackFx" || o.k === "master")) this.engine.syncFx(this.score);
     this.emit();
   }
   /** Cambios que llegan del dúo: sin historial ni reenvío. */
   applyRemote(ops: Op[]) {
     for (const op of ops) this.score = applyOp(this.score, op);
     finishScore(this.score);
+    this.changed(false);
     this.clampCursor();
     this.rerender();
     this.emit();
   }
   replaceScore(score: Score, keepHistory = false) {
     this.score = score;
+    this.changed(false);
     if (!keepHistory) { this.undoStack.length = 0; this.redoStack.length = 0; }
     this.clampCursor();
     this.rerender();
     this.emit();
   }
-  rerender() {
-    this.engine.render(this.score, this.renderTracks());
+  /** Vuelve a dibujar. Con `fromBar`, solo desde el renglón de ese compás (mucho más rápido al escribir). */
+  rerender(fromBar?: number) {
+    this.engine.render(this.score, this.renderTracks(), fromBar);
   }
   get canUndo() { return this.undoStack.length > 0; }
   get canRedo() { return this.redoStack.length > 0; }
   undo() {
     const prev = this.undoStack.pop();
     if (!prev) return;
-    this.redoStack.push(toJson(this.score));
+    this.redoStack.push(this.json());
     this.score = fromJson(prev);
     finishScore(this.score);
+    this.cleanJson = prev; this.unsnapped = false;
     this.clampCursor();
     this.outbox?.([{ k: "load", json: prev }]);
     this.onDirty?.();
@@ -108,9 +143,10 @@ export class Editor {
   redo() {
     const next = this.redoStack.pop();
     if (!next) return;
-    this.undoStack.push(toJson(this.score));
+    this.undoStack.push(this.json());
     this.score = fromJson(next);
     finishScore(this.score);
+    this.cleanJson = next; this.unsnapped = false;
     this.clampCursor();
     this.outbox?.([{ k: "load", json: next }]);
     this.onDirty?.();
@@ -485,3 +521,15 @@ function fitDuration(cur: number, remaining: number): number {
   return 64;
 }
 export { beatTicks };
+
+/** Primer compás que tocan los cambios, si todos son locales (notas, compases, tempo). Si alguno
+ *  cambia la pista o la canción entera, `undefined` = dibujar todo. */
+function firstBar(ops: Op[]): number | undefined {
+  let min = Infinity;
+  for (const o of ops) {
+    if ("b" in o && typeof o.b === "number") min = Math.min(min, o.b);
+    else if ((o.k === "barIns" || o.k === "barDel")) min = Math.min(min, o.at);
+    else return undefined;
+  }
+  return Number.isFinite(min) ? min : undefined;
+}

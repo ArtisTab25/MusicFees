@@ -67,11 +67,17 @@ export class FxEngine {
     e.synth.connectIndividualOutputs(e.chans.map((g) => g.input as unknown as AudioNode));
     e.seq = new Sequencer(e.synth, { skipToFirstNoteOn: false });
     e.ready = true;
+    e.sleepSoon(4000);
     return e;
   }
   /** Carga el MIDI de la canción y conecta cada canal a la cadena de su pista. */
+  private lastMidi: Uint8Array | null = null;
   loadSong(midi: Uint8Array, tracks: FxTrack[], beats: Beat[] = []) {
     this.beats = beats;
+    // Muchas ediciones (efectos, nombre, notación) no cambian el MIDI: no se vuelve a cargar la canción.
+    const same = this.lastMidi && this.lastMidi.length === midi.length && this.lastMidi.every((v, i) => v === midi[i]);
+    if (same) { this.route(tracks); return; }
+    this.lastMidi = midi.slice();
     const bin = midi.buffer.slice(midi.byteOffset, midi.byteOffset + midi.byteLength) as ArrayBuffer;
     // La carga termina después (en el hilo de audio) y entonces el secuenciador arranca solo: hasta el
     // aviso «songChange» no se sabe su posición real. Ahí se pausa y se fija la posición pedida.
@@ -118,15 +124,25 @@ export class FxEngine {
   private plugins = new Map<number, { key: string; insts: WamInstance[]; chain: TrackChain }>();
   /** Errores de carga por pista (para mostrarlos en la interfaz). */
   pluginErrors = new Map<number, string>();
-  /** Crea o reutiliza las instancias de plugins de una pista y las conecta en su cadena. */
-  async syncPlugins(index: number, refs: PluginRef[]) {
+  /** Crea o reutiliza las instancias de plugins de una pista y las conecta en su cadena.
+   *  Las llamadas de una misma pista van en fila: si dos se cruzaban, se creaban plugins de más que
+   *  nunca se destruían y seguían gastando procesador. */
+  private plugQueue = new Map<number, Promise<void>>();
+  syncPlugins(index: number, refs: PluginRef[]): Promise<void> {
+    const next = (this.plugQueue.get(index) ?? Promise.resolve()).then(() => this.doSyncPlugins(index, refs)).catch(() => { /* error ya anotado */ });
+    this.plugQueue.set(index, next);
+    return next;
+  }
+  private async doSyncPlugins(index: number, refs: PluginRef[]) {
     const key = JSON.stringify(refs.map((r) => r.src));
     const cur = this.plugins.get(index);
     const chain = this.chains.get(index);
     if (!chain) return;
     if (cur && cur.key === key) { if (cur.chain !== chain) { chain.setPluginNodes(cur.insts.map((i) => i.audioNode)); cur.chain = chain; } return; }
+    if (!refs.length && !cur) return;
     const insts: WamInstance[] = [];
     this.pluginErrors.delete(index);
+    if (refs.length) await this.ctx.resume(); // los plugins se inicializan en el hilo de audio
     for (const r of refs) {
       try { insts.push(await createPlugin(this.native, r)); }
       catch (e) { this.pluginErrors.set(index, `No se pudo cargar «${r.name}»: ${(e as Error).message}`); }
@@ -134,6 +150,7 @@ export class FxEngine {
     if (cur) for (const i of cur.insts) { try { i.audioNode.disconnect(); i.audioNode.destroy?.(); } catch { /* nada */ } }
     this.plugins.set(index, { key, insts, chain });
     chain.setPluginNodes(insts.map((i) => i.audioNode));
+    this.sleepSoon();
   }
   pluginInstances(index: number) { return this.plugins.get(index)?.insts ?? []; }
   setMaster(m: MasterFx | null) { this.master.set(m); }
@@ -155,8 +172,18 @@ export class FxEngine {
   /** Posición desde la que se toca (segundos), la última que pidió alphaTab o donde se pausó. */
   private target = 0;
   private loaded: Promise<void> = Promise.resolve();
+  // ---------- reposo ----------
+  // En pausa el contexto de audio se suspende: si no, el procesador sigue calculando todas las
+  // cadenas de efectos en silencio (medido: ~38 % de un núcleo de computadora; en un teléfono, todo).
+  private sleepT = 0;
+  /** Suspende el audio en unos segundos (deja sonar las colas de reverb y delay). */
+  private sleepSoon(ms = 3000) {
+    clearTimeout(this.sleepT);
+    this.sleepT = window.setTimeout(() => { if (this.seq?.paused && !this.counting && this.native.state === "running") void this.native.suspend(); }, ms);
+  }
+  private wake() { clearTimeout(this.sleepT); return this.ctx.resume(); }
   async play() {
-    await this.ctx.resume();
+    await this.wake();
     await this.loaded;
     const t0 = this.target;
     // La posición se manda antes de la cuenta inicial: la respuesta del secuenciador llega mientras
@@ -185,7 +212,7 @@ export class FxEngine {
     this.anchor = { ctx: this.ctx.currentTime + 0.015, song: t1 };
     this.startClicks();
   }
-  pause() { this.target = this.songNow; this.anchor = null; this.seq.pause(); this.stopClicks(); }
+  pause() { this.target = this.songNow; this.anchor = null; this.seq.pause(); this.stopClicks(); this.sleepSoon(); }
   seek(ms: number) {
     this.target = Math.max(0, ms / 1000);
     this.seq.currentTime = this.target;
@@ -229,12 +256,14 @@ export class FxEngine {
   /** Toca una nota suelta (al escribir) por el canal de la pista, con sus efectos. */
   previewNote(channel: number, program: number, key: number, velocity = 100) {
     if (!this.ready || !this.seq.paused) return;
-    void this.ctx.resume();
+    void this.wake();
+    this.sleepSoon(2500);
     if (channel !== 9) this.synth.programChange(channel, program);
     this.synth.noteOn(channel, key, velocity);
     setTimeout(() => this.synth.noteOff(channel, key), 600);
   }
   destroy() {
+    clearTimeout(this.sleepT);
     this.stopClicks();
     try { this.seq?.pause(); } catch { /* nada */ }
     try { this.synth?.destroy(); } catch { /* nada */ }

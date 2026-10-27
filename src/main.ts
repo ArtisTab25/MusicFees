@@ -463,7 +463,7 @@ ed.onDirty = () => {
   clearTimeout(saveLocalT);
   saveLocalT = window.setTimeout(() => {
     if (!songId) return;
-    const json = toJson(ed.score);
+    const json = ed.json();
     saveLocalDoc(songId, json);
     rememberSong({ id: songId, title: ed.score.title || "Sin título", updated: Date.now(), cloud: isCloud });
   }, 500);
@@ -476,7 +476,7 @@ function scheduleClaudeSave(delay = 2000) {
   saveClaudeT = window.setTimeout(async () => {
     if (!claudeLib || !isClaudeId(songId)) return;
     setSync("Guardando…");
-    try { await claudeLib.save(songId!.slice(7), ed.score.title, toJson(ed.score)); setSync(); }
+    try { await claudeLib.save(songId!.slice(7), ed.score.title, ed.json()); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
@@ -486,7 +486,7 @@ function scheduleCloudSave(delay = 1500) {
     if (!songId || !isCloud) return;
     if (live && !live.isHost) return; // guarda quien es anfitrión mientras los dos están conectados
     setSync("Guardando…");
-    try { await cloud.save(songId, ed.score.title, toJson(ed.score)); setSync(); }
+    try { await cloud.save(songId, ed.score.title, ed.json()); setSync(); }
     catch (e) { setSync((e as Error).message, true); }
   }, delay);
 }
@@ -505,7 +505,7 @@ function startLive(id: string) {
   live = new LiveSession(cloud, id, name, color);
   ed.outbox = (ops) => live?.sendOps(ops);
   live.onOps = (ops) => { ed.applyRemote(ops); if (live?.isHost) scheduleCloudSave(); };
-  live.onSnapshotRequest = (from) => { if (live?.isHost && from !== clientId) live.sendSnapshot(from, toJson(ed.score)); };
+  live.onSnapshotRequest = (from) => { if (live?.isHost && from !== clientId) live.sendSnapshot(from, ed.json()); };
   live.onSnapshot = (json) => { ed.replaceScore(fromJson(json), true); toast("Sincronizado con tu dúo."); };
   live.onReloadHint = () => setTimeout(async () => {
     try { const row = await cloud.get(id); if (row) ed.replaceScore(fromJson(row.data), true); } catch { /* se reintenta con el siguiente cambio */ }

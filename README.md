@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 0.7** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 0.8** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,24 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Rendimiento (0.8)
+
+Medido con Chromium en computadora (un teléfono es de 3 a 5 veces más lento):
+
+| Situación | 0.7 | 0.8 |
+| --- | --- | --- |
+| Motor de estudio en pausa | 38 % de un núcleo | 3 % |
+| Motor de estudio tocando | 55 % | 28 % |
+| Tecla a partitura dibujada (CPU frenada 4×) | ~820 ms | ~350 ms |
+
+- En pausa el audio del motor de estudio se suspende a los 3 s (antes seguía calculando todos los efectos en silencio).
+- Se cierra el contexto de audio que Tone.js crea al importarse y que quedaba corriendo.
+- Cada pista solo procesa las etapas de efectos que usa; sin masterizar no se procesan EQ, compresor ni ancho.
+- La canción se pasa a JSON una vez por estado, en un momento libre (antes, 2 o 3 veces por tecla). Al escribir seguido, esos cambios se deshacen juntos.
+- Se redibuja desde el renglón del compás editado.
+- Los plugins de una pista se cargan en fila (antes podían duplicarse).
+- Arreglos: lo escrito no sonaba hasta reabrir la canción (alphaTab solo regenera el MIDI si cambia la canción; ahora se regenera al darle play). Los efectos guardados no llegaban al motor tras editar o deshacer. Los plugins tienen controles propios con deslizadores grandes para el dedo.
 
 ## Bancos de sonido y APK
 

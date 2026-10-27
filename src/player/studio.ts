@@ -9,6 +9,17 @@ import type { MasterFx, Pedal, TrackFx } from "../score/model";
 import { octaveSemis } from "./fxPresets";
 
 type Ctx = Tone.BaseContext;
+
+// Tone crea al importarse un contexto de audio propio que queda corriendo aunque no suene nada
+// (gasta CPU y batería). Todo MusicFees pasa su contexto explícito, así que ese se cierra y en su
+// lugar queda uno sin conexión que nunca procesa.
+{
+  const def = Tone.getContext();
+  if (!(def instanceof Tone.OfflineContext)) {
+    Tone.setContext(new Tone.OfflineContext(1, 0.01, 44100));
+    void (def as Tone.Context).close().catch(() => { /* ya cerrado */ });
+  }
+}
 const opt = (context: Ctx) => ({ context });
 const flat: TrackFx = { preset: "", drive: 0, low: 5, mid: 5, high: 5, comp: 0, chorus: 0, delay: 0, reverb: 0 };
 
@@ -52,6 +63,11 @@ export class TrackChain {
   private plugIn: Tone.Gain; private plugOut: Tone.Gain;
   private pedalKey = "";
   private chorus: Tone.Chorus; private delay: Tone.FeedbackDelay;
+  private reverbBus: Tone.InputNode;
+  private fx: TrackFx = flat;
+  private plugCount = 0;
+  private linkKey = "";
+  private sending = false;
 
   constructor(private context: Ctx, reverbBus: Tone.InputNode, masterIn: Tone.InputNode) {
     const o = opt(context);
@@ -68,14 +84,14 @@ export class TrackChain {
     this.plugIn = new Tone.Gain(o); this.plugOut = new Tone.Gain(o);
     this.chorus = new Tone.Chorus({ ...o, frequency: 0.9, delayTime: 3.5, depth: 0.6, wet: 0 }).start();
     this.delay = new Tone.FeedbackDelay({ ...o, delayTime: 0.36, feedback: 0.3, wet: 0 });
-    this.input.chain(this.pre, this.shaper, this.post, this.hp, this.lp, this.eq, this.comp, this.makeup, this.pedalIn);
+    // Conexiones fijas dentro de cada etapa; entre etapas se conectan solo las que se usan (relink).
+    this.pre.chain(this.shaper, this.post, this.hp, this.lp);
+    this.comp.connect(this.makeup);
     this.pedalIn.connect(this.pedalOut);
-    this.pedalOut.connect(this.plugIn);
     this.plugIn.connect(this.plugOut);
-    this.plugOut.chain(this.chorus, this.delay, this.output);
     this.output.connect(masterIn);
     this.output.connect(this.send);
-    this.send.connect(reverbBus);
+    this.reverbBus = reverbBus;
     this.set(null);
   }
   /** Aplica los valores (0–10). null = pasa limpio. Los pedales se reconectan solo si cambia la lista. */
@@ -99,6 +115,31 @@ export class TrackChain {
     this.delay.feedback.value = 0.22 + (f.delay / 10) * 0.3;
     this.send.gain.value = (f.reverb / 10) * 0.7;
     this.setPedals(f.pedals ?? []);
+    this.fx = f;
+    this.relink();
+  }
+  /** Conecta en serie solo las etapas que hacen algo. Una etapa desconectada no se procesa:
+   *  una pista «sin efectos» pasa directo y casi no gasta. */
+  private relink() {
+    const f = this.fx;
+    const stages: [string, Tone.ToneAudioNode, Tone.ToneAudioNode][] = [];
+    if (f.drive > 0) stages.push(["amp", this.pre, this.lp]);
+    if (f.low !== 5 || f.mid !== 5 || f.high !== 5) stages.push(["eq", this.eq, this.eq]);
+    if (f.comp > 0) stages.push(["comp", this.comp, this.makeup]);
+    if (this.pedals.length) stages.push(["pedals", this.pedalIn, this.pedalOut]);
+    if (this.plugCount) stages.push(["plugins", this.plugIn, this.plugOut]);
+    if (f.chorus > 0) stages.push(["chorus", this.chorus, this.chorus]);
+    if (f.delay > 0) stages.push(["delay", this.delay, this.delay]);
+    const key = stages.map(([k]) => k).join(">") || "directo";
+    if (key !== this.linkKey) {
+      this.linkKey = key;
+      for (const n of [this.input, this.lp, this.eq, this.makeup, this.pedalOut, this.plugOut, this.chorus, this.delay]) n.disconnect();
+      let at: Tone.ToneAudioNode = this.input;
+      for (const [, head, tail] of stages) { at.connect(head); at = tail; }
+      at.connect(this.output);
+    }
+    const send = f.reverb > 0;
+    if (send !== this.sending) { this.sending = send; if (send) this.send.connect(this.reverbBus); else this.send.disconnect(); }
   }
   private setPedals(list: Pedal[]) {
     const key = JSON.stringify(list);
@@ -109,16 +150,20 @@ export class TrackChain {
     this.pedals = list.map((p) => makePedal(this.context, p));
     if (this.pedals.length) this.pedalIn.chain(...this.pedals, this.pedalOut);
     else this.pedalIn.connect(this.pedalOut);
+    this.linkKey = ""; // cambió lo que hay dentro de la etapa
   }
   /** Conecta en serie los nodos de plugins (lista vacía = directo). */
   setPluginNodes(nodes: AudioNode[]) {
     this.plugIn.disconnect();
-    if (!nodes.length) { this.plugIn.connect(this.plugOut); return; }
+    this.plugCount = nodes.length;
+    this.linkKey = "";
+    if (!nodes.length) { this.plugIn.connect(this.plugOut); this.relink(); return; }
     Tone.connect(this.plugIn, nodes[0]);
     for (let i = 0; i + 1 < nodes.length; i++) { try { nodes[i].disconnect(); } catch { /* nada */ } nodes[i].connect(nodes[i + 1]); }
     const last = nodes[nodes.length - 1];
     try { last.disconnect(); } catch { /* nada */ }
     Tone.connect(last, this.plugOut);
+    this.relink();
   }
   set level(v: number) { this.output.gain.value = v; }
   dispose() {
@@ -145,7 +190,8 @@ export class MasterChain {
     this.clip.curve = softClipCurve(); // (la opción «curve» del constructor de Tone se ignora)
     this.clip.oversample = "2x";
     this.output = new Tone.Gain(o);
-    this.input.chain(this.eq, this.glue, this.width, this.drive, this.limiter, this.clip, this.output);
+    this.eq.chain(this.glue, this.width, this.drive, this.limiter);
+    this.limiter.chain(this.clip, this.output);
     this.output.connect(destination);
     this.set(null);
   }
@@ -160,7 +206,17 @@ export class MasterChain {
     this.width.width.value = Math.max(0, Math.min(1, f.width / 10));
     this.drive.gain.value = Tone.dbToGain(f.loud * 1.4); // hasta +14 dB contra el limitador
     this.limiter.threshold.value = m ? -0.8 : -1;
+    // Sin masterizar no se procesan EQ, compresor ni ancho estéreo.
+    const full = !!m;
+    if (full !== this.full) {
+      this.full = full;
+      this.input.disconnect();
+      if (full) this.input.connect(this.eq);
+      else { this.drive.disconnect(); this.drive.connect(this.limiter); this.input.connect(this.limiter); }
+      if (full) { this.drive.disconnect(); this.drive.connect(this.limiter); }
+    }
   }
+  private full: boolean | null = null;
 }
 
 /** Lineal hasta 0.85; arriba se dobla suave hasta un máximo de 0.912 (−0.8 dBFS). */
