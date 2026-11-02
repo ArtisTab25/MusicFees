@@ -90,17 +90,17 @@ export function valueAt(x: Float32Array, fps: number, t: number, tol = 0.04): nu
  * Compás (3 o 4 tiempos) y fase del primer tiempo fuerte. `accent[k]` mide qué tan «de inicio de
  * compás» es el tiempo k: ataques del bajo, cambios de armonía, fuerza del golpe.
  */
-export function meterAndDownbeat(accent: number[]): { meter: 3 | 4; downbeat: number; conf: number } {
+export function meterAndDownbeat(accent: number[], force?: 3 | 4): { meter: 3 | 4; downbeat: number; conf: number } {
   const n = accent.length;
   if (n < 8) return { meter: 4, downbeat: 0, conf: 0 };
   const res: { meter: 3 | 4; phase: number; s: number }[] = [];
-  for (const m of [3, 4] as const) for (let ph = 0; ph < m; ph++) {
+  for (const m of (force ? [force] : [3, 4]) as (3 | 4)[]) for (let ph = 0; ph < m; ph++) {
     let on = 0, cOn = 0, off = 0, cOff = 0;
     for (let k = 0; k < n; k++) { if ((k - ph) % m === 0) { on += accent[k]; cOn++; } else { off += accent[k]; cOff++; } }
     const s = on / Math.max(1, cOn) - off / Math.max(1, cOff);
     res.push({ meter: m, phase: ph, s: m === 3 ? s * 0.8 : s }); // 4/4 es mucho más común
   }
   res.sort((a, b) => b.s - a.s);
-  const best = res[0], alt = res[1];
+  const best = res[0], alt = res[1] ?? res[0];
   return { meter: best.meter, downbeat: best.phase, conf: best.s > 0 ? Math.min(1, (best.s - Math.max(0, alt.s)) / best.s + 0.2) : 0 };
 }

@@ -63,7 +63,10 @@ export function analyzeNotes(input: {
       const on = audio ? valueAt(audio.onset, audio.fps, t) : 0;
       return ch * 1.2 + bOn * 1 + on * 0.4;
     });
-    const md = meterAndDownbeat(accent);
+    // Con batería o bajo separados: el compás se ve en lo que se repite (el patrón de bombo y caja, el
+    // bajo, la armonía) cada 3 o cada 4 tiempos. Si eso no decide, quedan los acentos.
+    const pm = stems || input.drums?.length ? patternMeter(beats, input.drums ?? [], bassLine, chroma) : null;
+    const md = meterAndDownbeat(accent, pm?.meter);
     meter = md.meter; downbeat = md.downbeat;
   }
   // Tonalidad: histograma de clases de altura ponderado por duración y fuerza.
@@ -157,6 +160,35 @@ function alignTimbre<T>(orig: RawNote[], kept: RawNote[], tim: T[]): T[] {
   const key = (n: RawNote) => `${n.s.toFixed(4)}|${n.p}`;
   const m = new Map(orig.map((n, i) => [key(n), tim[i]]));
   return kept.map((n) => m.get(key(n))!);
+}
+
+/**
+ * Compás por repetición (propio de MusicFees): para cada tiempo, un vector con lo que pasa en él
+ * (bombo, caja, platillos y bajo en cada cuarto del tiempo, y la armonía). En 3/4 el tiempo k se parece
+ * más al k+3 y al k+6; en 4/4, al k+4 y al k+8. Devuelve el compás solo si la diferencia es clara.
+ */
+export function patternMeter(beats: number[], drums: RawNote[], bass: RawNote[], chroma: number[][]): { meter: 3 | 4; margin: number } | null {
+  const n = beats.length;
+  if (n < 16) return null;
+  const sub = 4, D = 4 * sub + 12;
+  const v = beats.map(() => new Float64Array(D));
+  const put = (t: number, ch: number, w: number) => {
+    const q = beatPos(beats, t);
+    const k = Math.floor(q + 0.5 / sub), f = Math.round((q - k) * sub);
+    if (k < 0 || k >= n || f < 0 || f >= sub) return;
+    v[k][ch * sub + f] += w;
+  };
+  for (const d of drums) put(d.s, d.p === 36 ? 0 : d.p === 38 ? 1 : d.p >= 41 && d.p <= 48 && d.p !== 42 && d.p !== 44 && d.p !== 46 ? 3 : 2, d.p === 36 || d.p === 38 ? 1 : 0.5);
+  for (const b of bass) put(b.s, 3, 0.7);
+  for (let k = 0; k < n; k++) { const c = chroma[k], s = c.reduce((a, b) => a + b, 0) || 1; for (let p = 0; p < 12; p++) v[k][4 * sub + p] = (0.6 * c[p]) / s; }
+  const sim = (a: Float64Array, b: Float64Array) => { let x = 0, na = 0, nb = 0; for (let i = 0; i < D; i++) { x += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; } return na && nb ? x / Math.sqrt(na * nb) : 0; };
+  const lagSim = (L: number) => { let s = 0, c = 0; for (let k = 0; k + L < n; k++) { s += sim(v[k], v[k + L]); c++; } return c ? s / c : 0; };
+  const s3 = lagSim(3) + lagSim(6), s4 = lagSim(4) + lagSim(8);
+  const dbg = (globalThis as { MF_DEBUG?: (k: string, v: unknown) => void }).MF_DEBUG;
+  if (typeof dbg === "function") dbg("meterLags", [2, 3, 4, 5, 6, 7, 8, 9, 12].map((L) => `${L}:${lagSim(L).toFixed(2)}`).join(" "));
+  const margin = s3 - s4;
+  if (Math.abs(margin) < 0.06) return null;
+  return { meter: margin > 0 ? 3 : 4, margin };
 }
 
 function rmsAt(rms: Float32Array, t: number) { return rms[Math.min(rms.length - 1, Math.max(0, Math.floor(t)))] ?? 0; }

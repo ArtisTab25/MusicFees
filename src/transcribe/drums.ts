@@ -52,7 +52,21 @@ export function transcribeDrums(pcm: Float32Array, sr: number): RawNote[] {
   // Cada rasgo se compara con los golpes fuertes de esta misma canción.
   const p90 = (xs: number[]) => { const s = xs.slice().sort((a, b) => a - b); return s[Math.floor(s.length * 0.9)] || 1; };
   const N = { sub: p90(hits.map((h) => h.sub)), low: p90(hits.map((h) => h.low)), lowmid: p90(hits.map((h) => h.lowmid)), mid: p90(hits.map((h) => h.mid)), high: p90(hits.map((h) => h.high)) };
-  if ((globalThis as { MF_DEBUG?: boolean }).MF_DEBUG) for (const h of hits) console.log(h.t.toFixed(2), "S", (h.sub / N.sub).toFixed(2), "L", (h.low / N.low).toFixed(2), "LM", (h.lowmid / N.lowmid).toFixed(2), "M", (h.mid / N.mid).toFixed(2), "H", (h.high / N.high).toFixed(2), "dH", h.decHi.toFixed(2), "dL", h.decLo.toFixed(2), "Hz", Math.round(h.peakHz));
+  const dbg = (globalThis as { MF_DEBUG?: (k: string, v: unknown) => void }).MF_DEBUG;
+  if (typeof dbg === "function") {
+    const B2 = { hm: band(2000, 5000), vh: band(8000, 11000), m1: band(500, 1200) };
+    dbg("drumHits", hits.map((h, j) => {
+      const i = on[j].i;
+      const hm = rise(i, B2.hm), vh = rise(i, B2.vh), m1 = rise(i, B2.m1);
+      let num = 0, den = 0; for (const k of band(3000, 11000)) { const e = Math.max(0, (mag[i + 1]?.[k] ?? 0) - (mag[i - 2]?.[k] ?? 0)); num += e * Math.log2(C[k]); den += e; }
+      const ratioAt = (ks: number[], df: number) => { let pk = 0; for (let f = i; f <= i + 3; f++) pk = Math.max(pk, energy(f, ks)); const pre = energy(Math.max(0, i - 2), ks); return pk > pre ? (energy(i + 2 + df, ks) - pre) / (pk - pre) : 0; };
+      const r3hm = ratioAt(B2.hm, 3), r3vh = ratioAt(B2.vh, 3), r5hm = ratioAt(B2.hm, 5), r5vh = ratioAt(B2.vh, 5);
+      const lvl = (ks: number[]) => { let s2 = 0; for (let f = i; f <= i + 2; f++) s2 = Math.max(s2, energy(f, ks)); return s2; };
+      const tilt = Math.log2((lvl(band(3000, 6000)) + 1e-6) / (lvl(band(7000, 11000)) + 1e-6));
+      return { r3hm, r3vh, r5hm, r5vh, tilt, t: h.t, v: h.v, S: h.sub / N.sub, Lo: h.low / N.low, LM: h.lowmid / N.lowmid, M: h.mid / N.mid, H: h.high / N.high, decHi: h.decHi, decLo: h.decLo, decMid: decay(i, B.mid), peakHz: h.peakHz,
+        hm: hm / (N.high || 1), vh: vh / (N.high || 1), m1: m1 / (N.mid || 1), cent: den ? num / den : 0, rawH: h.high, rawS: h.sub, rawM: h.mid };
+    }));
+  }
   const out: RawNote[] = [];
   const longs: number[] = []; // platillos que se sostienen: hi-hat abierto o ride
   const toms: { h: Hit; a: number }[] = [];

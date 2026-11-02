@@ -10,9 +10,7 @@ import { BasicPitch, noteFramesToTime, outputToNotesPoly } from "@spotify/basic-
 import * as ort from "onnxruntime-web/webgpu";
 import { audioRhythm } from "./features";
 import { analyzeNotes } from "./analyze";
-import { transcribeDrums } from "./drums";
-import { trackBass } from "./bassline";
-import { noteTimbres } from "./timbre";
+import { transcribeSeparated } from "./pipeline";
 import { MDX_NFFT, separateStem, toMono22k, type Stem } from "./separate";
 import type { Analysis, RawNote } from "./types";
 
@@ -78,7 +76,13 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
   // WebGPU solo si hay un adaptador de verdad (si no, ONNX Runtime puede quedarse esperando).
   const gpu = (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
   let hasGpu = false;
-  try { hasGpu = !!gpu && !!(await Promise.race([gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(null), 3000))])); } catch { hasGpu = false; }
+  try {
+    type Adapter = { isFallbackAdapter?: boolean; info?: { isFallbackAdapter?: boolean; vendor?: string; architecture?: string; description?: string } };
+    const ad = gpu ? (await Promise.race([gpu.requestAdapter(), new Promise((r) => setTimeout(() => r(null), 3000))])) as Adapter | null : null;
+    // Un adaptador «de respaldo» (WebGPU por software, p. ej. SwiftShader) es muchísimo más lento que WebAssembly.
+    const inf = ad?.info, txt = `${inf?.vendor ?? ""} ${inf?.architecture ?? ""} ${inf?.description ?? ""}`.toLowerCase();
+    hasGpu = !!ad && !ad.isFallbackAdapter && !inf?.isFallbackAdapter && !/swiftshader|llvmpipe|software|lavapipe/.test(txt);
+  } catch { hasGpu = false; }
   const order: Stem[] = ["vocals", "drums", "bass"];
   const stems = {} as Record<Stem | "other", [Float32Array, Float32Array]>;
   const oL = L.slice(), oR = R.slice();
@@ -110,17 +114,6 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
   return { stems, ep };
 }
 
-/** Por segundo: cuánto pesa una fuente respecto a la mezcla (para no transcribir lo que solo se coló). */
-function presence(src: Float32Array, mix: Float32Array): Float32Array {
-  const n = Math.ceil(src.length / SR), out = new Float32Array(n);
-  for (let s = 0; s < n; s++) {
-    let a = 0, b = 0;
-    for (let i = s * SR; i < Math.min(src.length, (s + 1) * SR); i += 2) { a += src[i] * src[i]; b += mix[i] * mix[i]; }
-    out[s] = b > 0 ? Math.sqrt(a / b) : 0;
-  }
-  return out;
-}
-
 self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
@@ -145,31 +138,8 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
       vocals: toMono22k(...stems.vocals), drums: toMono22k(...stems.drums),
       bass: toMono22k(...stems.bass), other: toMono22k(...stems.other),
     };
-    // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos).
-    const vp = presence(mono.vocals, mix);
-    const sung = vp.filter((x) => x >= 0.12).length;
-    let vocals: RawNote[] = [];
-    const minSung = Math.min(8, Math.max(3, vp.length * 0.3));
-    if (sung >= minSung) {
-      vocals = (await notesOf(mono.vocals, sensitivity, "Escuchando la voz", 60, 8))
-        .filter((n) => (vp[Math.floor(n.s)] ?? 0) >= 0.12 && n.p >= 40 && n.p <= 88);
-    }
-    post({ type: "progress", pct: 68, msg: "Siguiendo la línea del bajo…" });
-    // YIN es más fiel que el modelo polifónico en los graves; si casi no encuentra nada, se usa el modelo.
-    let bassNotes = trackBass(mono.bass, SR);
-    if (bassNotes.length < 20) bassNotes = (await notesOf(mono.bass, sensitivity, "Escuchando el bajo", 70, 6)).filter((n) => n.p <= 67);
-    const otherNotes = await notesOf(mono.other, sensitivity, "Escuchando guitarras y teclados", 76, 12);
-    post({ type: "progress", pct: 89, msg: "Leyendo la batería: bombo, caja, toms y platillos…" });
-    const dp = presence(mono.drums, mix);
-    const drumHits = drums && dp.filter((x) => x >= 0.15).length >= 8 ? transcribeDrums(mono.drums, SR) : [];
-    post({ type: "progress", pct: 92, msg: "Reconociendo instrumentos por su timbre…" });
-    const otherTimbre = noteTimbres(mono.other, SR, otherNotes);
-    post({ type: "progress", pct: 95, msg: "Midiendo el ritmo y la armonía…" });
-    const r = audioRhythm(mix, SR, false);
-    const analysis = analyzeNotes({ notes: [], drums: drumHits, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode, audio: r.features,
-      stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre } });
-    if (r.tempoConf < 0.35) analysis.notesForUser.push("El pulso no es muy marcado: revisa el tempo y dónde empieza el compás.");
-    if (!vocals.length && sung < minSung) analysis.notesForUser.push("No encontré voz cantada: la melodía principal sale de los instrumentos.");
+    const analysis = await transcribeSeparated(mix, mono, { mode, drums }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
+      (pct, msg) => post({ type: "progress", pct, msg }));
     post({ type: "done", analysis, backend: `${be}+${ep}`, ms: performance.now() - t0 });
   } catch (err) {
     post({ type: "error", message: (err as Error).message || String(err) });

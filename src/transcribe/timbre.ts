@@ -94,6 +94,9 @@ export function splitOther(notes: RawNote[], timbres: NoteTimbre[] | null, beat 
       if (sus > 0.75 && br < 0.35) s += 0.7;  // sostenido y opaco: órgano / pad
       if (at > 0.05) s += 0.4;                // ataque lento: pad o cuerdas
       if (sus < 0.25 && br < 0.6) s -= 0.3;   // se apaga rápido: púa
+      // Brillo (armónicos 6–12 contra 1–3): el teclado suena más redondo que la guitarra (medido con las
+      // partituras de Brayand: mediana 0,12 en teclados contra 0,43 en guitarras).
+      if (br < 0.18) s += 1; else if (br > 0.3) s -= 0.4;
     }
     return s;
   };
@@ -101,7 +104,8 @@ export function splitOther(notes: RawNote[], timbres: NoteTimbre[] | null, beat 
   // Suavizado: un acorde suelto no cambia de instrumento a mitad de una frase.
   const sm = scores.map((_, i) => { const w = scores.slice(Math.max(0, i - 2), i + 3).sort((a, b) => a - b); return w[w.length >> 1]; });
   const guitar: RawNote[] = [], keys: RawNote[] = [];
-  groups.forEach((g, i) => (sm[i] > 0.35 ? keys : guitar).push(...g.map((x) => x.n)));
+  // Umbral alto: en una banda «lo demás» suele ser guitarra; el teclado necesita evidencia clara.
+  groups.forEach((g, i) => (sm[i] > 0.9 ? keys : guitar).push(...g.map((x) => x.n)));
   // Si una de las dos capas es casi nada, todo va a la otra (mejor una pista limpia que dos a medias).
   const total = guitar.length + keys.length || 1;
   if (keys.length / total < 0.12) { guitar.push(...keys); keys.length = 0; }

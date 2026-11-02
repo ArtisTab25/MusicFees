@@ -47,6 +47,24 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.1: calibrada con partituras reales
+
+Medido nota por nota contra 10 canciones de Brayand (cada .gp con su mp3 exportado), en fragmentos de 90 s y, para comprobar que no se ajustó de más, en otros fragmentos de 60 s que no se usaron para calibrar (tolerancia de 50 ms y la altura exacta):
+
+| Medida (promedio de 9 canciones) | 1.3 | 1.3.1 | 1.3.1 en fragmentos no vistos |
+|---|---|---|---|
+| Bajo (F) | 23 % | 69 % | 62 % (1.3: 22 %) |
+| Notas en la pista del instrumento correcto | 44 % | 66 % | 64 % (1.3: 40 %) |
+| Tempo correcto | 89 % | 100 % | 89 % |
+| Bombo / caja / hi-hat (F) | 88 / 76 / 66 % | 89 / 74 / 66 % | 78 / 63 / 59 % |
+| Raíz del acorde | 72 % | 72 % | 65 % |
+
+- **Bajo:** nuevo seguidor en dos capas. Los ataques se buscan con ventanas cortas y en la banda aguda (el clic de la púa), y también donde la vibración se vuelve periódica otra vez al pulsar de nuevo la cuerda: así ya no se funden las notas repetidas y las notas empiezan donde suenan (antes llegaban ~80 ms tarde). La altura sale de YIN con un umbral estricto y la mediana de cada nota.
+- **Guitarra contra teclado:** se suma el brillo (los teclados medidos suenan más redondos: armónicos agudos 0,12 contra 0,43 en guitarras) y el teclado necesita evidencia clara; antes la mitad de las guitarras caían en «Teclado».
+- **Tempo al doble:** si la caja cae siempre en el mismo tiempo de cada cuatro, el pulso real es la mitad (salvo ritmos a medio tiempo muy lentos).
+- **Compás:** con batería y bajo separados también se mira qué se repite cada 3 o cada 4 tiempos.
+- Límites que siguen: el ride casi siempre sale como hi-hat; las notas de guitarras y teclados encimados aciertan ~35 %; vientos y cuerdas (sax, trompeta, violín) caen en la pista de guitarra; el 3/4 de «Monet» sale en 4/4.
+
 ## Versión 1.3: transcripción «Fiel» con separación de fuentes
 
 - **Calidad «Fiel»** (predeterminada en Transcribir audio): antes de transcribir, la mezcla se separa en **voz, batería, bajo y lo demás** con los modelos MDX-Net de KUIELab (Music Demixing Challenge 2021, MIT; versión ONNX de Ultimate Vocal Remover), ejecutados en el dispositivo con **ONNX Runtime Web** (WebGPU si el navegador lo tiene; si no, WebAssembly). Los modelos (~106 MB con el motor) se bajan una vez y quedan guardados. «Rápida» sigue disponible.

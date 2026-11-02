@@ -213,3 +213,35 @@ test("bajo: YIN encuentra la nota y separa las repetidas", async () => {
   seq.forEach((p, k) => { const f = 440 * 2 ** ((p - 69) / 12); for (let i = 0; i < SR * 0.45; i++) { const t = i / SR; x[k * SR / 2 + i] += 0.5 * Math.exp(-t * 3) * (Math.sin(2 * Math.PI * f * t) + 0.5 * Math.sin(4 * Math.PI * f * t)); } });
   assert.deepEqual(trackBass(x, SR).map((n) => n.p), seq);
 });
+
+test("tempo al doble: la caja en un solo tiempo de cada cuatro → se toma la mitad", async () => {
+  const { halveByBackbeat } = await import("../src/transcribe/pipeline");
+  // Pulso detectado a 140 (0,4286 s); la canción real va a 70 con caja en 2 y 4 (cada 4 tiempos detectados).
+  const p = 60 / 140, beats = Array.from({ length: 64 }, (_, i) => i * p);
+  const drums = [] as { s: number; e: number; p: number; a: number }[];
+  for (let i = 0; i < 64; i++) {
+    if (i % 4 === 0) drums.push({ s: beats[i], e: beats[i] + 0.1, p: 36, a: 1 });
+    if (i % 4 === 2) drums.push({ s: beats[i], e: beats[i] + 0.1, p: 38, a: 1 });
+  }
+  const half = halveByBackbeat(beats, drums);
+  assert.ok(half);
+  assert.equal(half!.length, 32);
+  assert.ok(Math.abs(half![0] - 0) < 1e-9, "fase en el bombo");
+  // A tempo correcto (caja en 2 y 4 = cada 2 tiempos) no se toca.
+  const ok = [] as typeof drums;
+  for (let i = 0; i < 64; i++) ok.push({ s: beats[i], e: beats[i] + 0.1, p: i % 2 ? 38 : 36, a: 1 });
+  assert.equal(halveByBackbeat(beats, ok), null);
+});
+
+test("compás por repetición del patrón: 3/4 contra 4/4", async () => {
+  const { patternMeter } = await import("../src/transcribe/analyze");
+  const beats = Array.from({ length: 48 }, (_, i) => i * 0.5);
+  const mk = (m: number) => {
+    const d = [] as { s: number; e: number; p: number; a: number }[];
+    beats.forEach((t, i) => { const k = i % m; d.push({ s: t, e: t + 0.1, p: k === 0 ? 36 : k === m - 1 && m === 4 ? 38 : k === 1 ? 38 : 42, a: 1 }); if (k === 0) d.push({ s: t + 0.25, e: t + 0.3, p: 42, a: 0.5 }); });
+    return d;
+  };
+  const chroma = beats.map(() => new Array(12).fill(1));
+  assert.equal(patternMeter(beats, mk(3), [], chroma)?.meter, 3);
+  assert.equal(patternMeter(beats, mk(4), [], chroma)?.meter, 4);
+});
