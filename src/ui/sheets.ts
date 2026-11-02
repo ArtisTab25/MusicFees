@@ -6,7 +6,7 @@ import type { KeyInput } from "../editor/keys";
 import type { Cloud, LiveSession } from "../collab/cloud";
 import { localList, forgetSong, loadLocalDoc } from "../collab/cloud";
 import type { ClaudeLibrary } from "../collab/claudeLib";
-import { kindOf, fxMap, fxChanges, fxAtBar, instrumentChanges, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
+import { analysisOf, kindOf, fxMap, fxChanges, fxAtBar, instrumentChanges, masterOf, drumKit, metaMap, trackJson, type MasterFx, type NoteFx, type Op, type Pedal, type PedalType, type PluginRef, type TrackFx } from "../score/model";
 import { Capacitor } from "@capacitor/core";
 import { addVersion, deleteTrash, deleteVersion, libMeta, parseTags, setLibMeta, trash, trashList, versions, type LibMeta } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
@@ -462,11 +462,19 @@ export class Sheets {
   }
 
   // ---------- menú del logo ----------
-  menu(section = "Archivo") {
+  /** Ventanas de los módulos que viven en otros archivos (transcriptor y análisis). */
+  panel(title: string, side: "left" | "right" | "full", ...content: (HTMLElement | null)[]) { return this.open(title, side, ...content); }
+  async transcribe() { (await import("../transcribe/ui")).transcribeSheet(this, this.c); }
+  async analysis() { (await import("../transcribe/ui")).analysisSheet(this, this.c); }
+  async lastAnalysis() { (await import("../transcribe/ui")).lastAnalysisSheet(this, this.c); }
+
+  /**
+   * Menú por módulos: primero las tarjetas de cada módulo; dentro de cada uno, sus funciones en grupos.
+   * Ninguna función se perdió: los grupos de antes (Archivo, Editar, Pista…) viven ahora en su módulo.
+   */
+  menu(section = "") {
     const { ed, engine } = this.c;
     const body = this.open("MusicFees", "full");
-    const sections = ["Archivo", "Editar", "Pista", "Compás", "Nota", "Sección", "Dúo", "Herramientas", "Sonido", "Vista", "Ayuda"];
-    body.append(h("div", { class: "menu-tabs" }, sections.map((s) => h("button", { "aria-pressed": s === section, onclick: () => this.menu(s) }, s))));
     const item = (label: string, sub: string, fn: () => void) => h("button", { onclick: () => fn() }, label, sub ? h("small", null, sub) : null);
     const close = (fn: () => void) => () => { this.close(); fn(); };
     const items: Record<string, HTMLElement[]> = {
@@ -565,12 +573,43 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 1.1", () => this.about()),
+        item("Acerca de MusicFees", "Versión 1.2", () => this.about()),
         item("Licencias", "Programas y recursos de terceros", () => this.about("licencias")),
         item("Avisos legales", "Términos, privacidad, derechos de autor", () => this.about("avisos")),
       ],
     };
-    body.append(h("div", { class: "menu-grid" }, items[section] ?? []));
+    items["Análisis"] = [
+      item("Transcribir audio", "Canción, pista o grabación → pistas con tablatura", () => void this.transcribe()),
+      item("Analizar esta canción", "Tonalidad, acordes, estructura y contrapunto", () => void this.analysis()),
+      item("Último análisis", analysisOf(ed.score) ? "Guardado con la canción" : "Todavía no hay", () => void this.lastAnalysis()),
+      item("Biblioteca de acordes", "Diagramas e inserción", () => this.chords()),
+    ];
+    // Los módulos y sus grupos (las claves antiguas de `items` se conservan como grupos).
+    const MODULES: { id: string; icon: string; name: string; sub: string; groups: [string, string][] }[] = [
+      { id: "Archivo", icon: "▤", name: "Archivo", sub: "Guardar, biblioteca, importar y exportar", groups: [["", "Archivo"]] },
+      { id: "Componer", icon: "✎", name: "Componer", sub: "Editar notas, duraciones y herramientas", groups: [["Editar", "Editar"], ["Nota", "Nota"], ["Herramientas de escritura", "Herramientas"]] },
+      { id: "Estructura", icon: "§", name: "Estructura", sub: "Compases, repeticiones y secciones", groups: [["Compás", "Compás"], ["Secciones", "Sección"]] },
+      { id: "Pistas", icon: "≡", name: "Pistas", sub: "Agregar, propiedades y vista", groups: [["", "Pista"]] },
+      { id: "Sonido", icon: "♫", name: "Sonido y estudio", sub: "Tempo, efectos, masterizado, bancos", groups: [["", "Sonido"]] },
+      { id: "Análisis", icon: "✦", name: "Análisis y transcripción", sub: "Audio a pistas, armonía, forma y contrapunto", groups: [["", "Análisis"]] },
+      { id: "Dúo", icon: "⇄", name: "Colaborar", sub: "Dúo en vivo, comentarios y propuestas", groups: [["", "Dúo"]] },
+      { id: "Vista", icon: "⚙", name: "Vista y ayuda", sub: "Preferencias, atajos y avisos", groups: [["Vista", "Vista"], ["Ayuda", "Ayuda"]] },
+    ];
+    // Compatibilidad: abrir por el nombre de un grupo antiguo lleva a su módulo.
+    const mod = MODULES.find((m) => m.id === section || m.groups.some(([, k]) => k === section));
+    if (!mod) {
+      body.append(h("div", { class: "modgrid" }, MODULES.map((m) => h("button", { class: `modcard${m.id === "Análisis" ? " accent" : ""}`, onclick: () => this.menu(m.id) },
+        h("span", { class: "mi", "aria-hidden": "true" }, m.icon), h("span", null, h("b", null, m.name), h("small", null, m.sub))))));
+      body.append(h("p", { class: "note center" }, "Toca un módulo. Atajos: F1 ayuda · Ctrl + S guardar."));
+      return;
+    }
+    body.append(h("nav", { class: "modnav", "aria-label": "Módulos" },
+      h("button", { class: "back", onclick: () => this.menu(), "aria-label": "Todos los módulos" }, "‹ Módulos"),
+      ...MODULES.map((m) => h("button", { "aria-pressed": m === mod, onclick: () => this.menu(m.id), title: m.name }, h("span", { "aria-hidden": "true" }, m.icon), " ", m.name.split(" ")[0]))));
+    for (const [title, key] of mod.groups) {
+      const list = items[key] ?? [];
+      body.append(h("div", { class: "sec" }, title ? h("h3", null, title) : null, h("div", { class: "menu-grid" }, list)));
+    }
   }
 
   // ---------- canciones ----------
@@ -806,6 +845,7 @@ export class Sheets {
         cont,
         big("♫", "Mis canciones", "Biblioteca, carpetas y muestras", () => this.library()),
         big("+", "Nueva canción", "Por estilo: rock, corrido, cumbia…", () => this.newSong()),
+        big("✦", "Transcribir audio", "De una grabación a pistas con tablatura", () => void this.transcribe(), "accent"),
         big("⇪", "Importar", "Guitar Pro, MusicXML", () => this.importDialog()),
         big("⚙", "Preferencias", "Vista, sonido, accesibilidad", () => this.prefsSheet()),
         big("?", "Ayuda", "Atajos de teclado", () => this.help()),
@@ -814,7 +854,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.1 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.2 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 
@@ -1554,10 +1594,13 @@ export class Sheets {
       ["jsPDF y html2canvas", "Exportar PDF", "MIT"],
       ["lamejs (@breezystack)", "Exportar MP3", "LGPL-3.0"],
       ["DOMPurify", "Limpieza de texto en PDF", "Apache-2.0 / MPL-2.0"],
+      ["Basic Pitch (Spotify)", "Modelo de reconocimiento de notas del transcriptor", "Apache-2.0"],
+      ["TensorFlow.js", "Ejecuta el modelo de notas en el dispositivo", "Apache-2.0"],
+      ["@tonejs/midi", "Dependencia de Basic Pitch", "MIT"],
     ];
     const body: Record<typeof tab, HTMLElement[]> = {
       acerca: [
-        h("p", null, h("b", null, "MusicFees 1.1"), " — tablaturas y partituras multipista, con edición en dúo, comentarios y propuestas."),
+        h("p", null, h("b", null, "MusicFees 1.2"), " — tablaturas y partituras multipista, con edición en dúo, comentarios, propuestas y transcripción de audio a pistas."),
         P("Hecha en Comalcalco, Tabasco. Gratuita, sin anuncios y sin vender datos."),
         N("Código: github.com/ArtisTab25/MusicFees · Reportar un problema: github.com/ArtisTab25/MusicFees/issues"),
       ],

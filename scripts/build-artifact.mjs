@@ -18,6 +18,15 @@ const drop = ["font/Bravura.svg", "font/Bravura.eot", "font/Bravura.otf", "font/
 for (const f of drop) rmSync(join(OUT, f), { force: true });
 renameSync(join(OUT, "soundfont/GeneralUser-GS.sf3"), join(OUT, "soundfont/GeneralUser-GS.sf3.ogg"));
 for (const f of readdirSync(join(OUT, "samples"))) renameSync(join(OUT, "samples", f), join(OUT, "samples", `${f}.ogg`));
+// Modelo de notas del transcriptor: los pesos (.bin) viajan como .ogg y un model.art.json apunta a ellos.
+const BP = join(OUT, "models/basic-pitch");
+if (existsSync(BP)) {
+  const mj = JSON.parse(readFileSync(join(BP, "model.json"), "utf8"));
+  for (const g of mj.weightsManifest) g.paths = g.paths.map((p) => { renameSync(join(BP, p), join(BP, `${p}.ogg`)); return `${p}.ogg`; });
+  writeFileSync(join(BP, "model.art.json"), JSON.stringify(mj));
+  rmSync(join(BP, "model.json"));
+  renameSync(join(BP, "LICENSE"), join(BP, "LICENSE.txt"));
+}
 
 // Plugins de la comunidad: el artefacto admite pocos archivos (511 por versión), así que se quitan
 // los que no se usan al correr (fuentes, tipos, documentación, páginas de demo) y los dos más

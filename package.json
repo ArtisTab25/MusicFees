@@ -1,7 +1,7 @@
 {
   "name": "musicfees",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "build:artifact": "node scripts/build-artifact.mjs",
-    "test": "esbuild tests/model.test.ts --bundle --platform=node --format=esm --outfile=tests/_model.test.mjs --external:@coderline/alphatab --log-level=warning && node --test tests/_model.test.mjs",
+    "test": "esbuild tests/model.test.ts tests/transcribe.test.ts --bundle --platform=node --format=esm --outdir=tests --entry-names=_[name] --out-extension:.js=.mjs --external:@coderline/alphatab --log-level=warning && node --test tests/_model.test.mjs tests/_transcribe.test.mjs",
     "predev": "node scripts/wam.mjs"
   },
   "dependencies": {
@@ -21,7 +21,9 @@
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/share": "^8.0.3",
     "@coderline/alphatab": "1.8.4",
+    "@spotify/basic-pitch": "1.0.1",
     "@supabase/supabase-js": "2.118.0",
+    "@tensorflow/tfjs-backend-wasm": "3.21.0",
     "@webaudiomodules/sdk": "0.0.12",
     "jspdf": "4.2.1",
     "spessasynth_lib": "4.3.14",

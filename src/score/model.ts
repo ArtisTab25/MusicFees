@@ -61,7 +61,9 @@ export type Op =
   | { k: "instrumentAt"; t: number; b: number; program: number | null }
   /** Desde el compás b la pista usa otra cadena de efectos (del: quitar el cambio). */
   | { k: "fxAt"; t: number; b: number; fx: TrackFx | null; del?: boolean }
-  | { k: "proposal"; p?: Proposal; del?: string };
+  | { k: "proposal"; p?: Proposal; del?: string }
+  /** Resumen del último análisis musical (transcripción o análisis de la partitura). null = quitarlo. */
+  | { k: "analysis"; a: SongAnalysis | null };
 
 /** Formas de bend que se escriben con un toque (valores en cuartos de tono: 4 = un tono). */
 export type BendShape = "none" | "half" | "full" | "oneHalf" | "double" | "release" | "prebend" | "prebendRelease";
@@ -219,6 +221,16 @@ function writeTag(score: Score, tag: string, val: unknown[]) {
   score.notices = rest.join("\n");
 }
 export const comments = (score: Score) => readTag<BarComment[]>(score, CM_TAG, []);
+/** Resumen del análisis musical guardado con la canción (`MFAN1` en notices). */
+export interface SongAnalysis {
+  at: number; source: "audio" | "partitura"; tempo: number; meter: number; key: string;
+  /** Acordes por compás: [compás, tiempo dentro del compás, nombre, grado]. */
+  chords: [number, number, string, string][];
+  sections: { b0: number; b1: number; label: string; name: string }[];
+  counterpoint: string[]; notes: string[];
+}
+const AN_TAG = "MFAN1:";
+export const analysisOf = (score: Score): SongAnalysis | null => readTag<SongAnalysis[]>(score, AN_TAG, [])[0] ?? null;
 export const proposals = (score: Score) => readTag<Proposal[]>(score, PR_TAG, []);
 /** Al insertar o borrar compases, los comentarios siguen a su compás (los del compás borrado se van). */
 function shiftComments(score: Score, at: number, d: 1 | -1) {
@@ -639,6 +651,7 @@ export function applyOp(score: Score, op: Op): Score {
       writeTag(score, CM_TAG, list.sort((a, b) => a.b - b.b || a.at - b.at));
       break;
     }
+    case "analysis": writeTag(score, AN_TAG, op.a ? [op.a] : []); break;
     case "proposal": {
       const list = proposals(score).filter((p) => p.id !== (op.p?.id ?? op.del));
       if (op.p) list.push(op.p);

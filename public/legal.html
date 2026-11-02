@@ -14,7 +14,7 @@
 </head>
 <body>
 <h1>MusicFees · Avisos legales</h1>
-<small>Versión 1.1 · vigente desde el 27 de octubre de 2026</small>
+<small>Versión 1.2 · vigente desde el 2 de noviembre de 2026</small>
 <p class="sum">MusicFees es una herramienta gratuita para escribir, escuchar y compartir música entre un grupo pequeño de personas. Al usarla aceptas estos avisos. Léelos completos; aquí van los puntos clave: se ofrece tal cual y sin garantías; tú eres responsable de lo que escribes, subes y compartes; respeta los derechos de autor; tus datos se usan solo para que la app funcione; puedes borrar tu cuenta cuando quieras.</p>
 <nav><a href="#terminos">Términos y condiciones de uso</a> <a href="#privacidad">Aviso de privacidad</a> <a href="#autor">Derechos de autor y contenido de terceros</a> <a href="#plugins">Plugins, sonidos y archivos</a> <a href="#colaboracion">Colaboración, comentarios y propuestas</a></nav>
 <h2 id="terminos">Términos y condiciones de uso</h2>
@@ -38,12 +38,14 @@
 <h3>Para qué se usan</h3><p>Finalidades necesarias: crear y mantener tu cuenta, guardar y sincronizar tu música, permitir la edición en colaboración, hacer respaldos y versiones, y dar seguridad al servicio. No hay finalidades secundarias: no se usan tus datos para publicidad, perfiles comerciales ni venta.</p>
 <h3>Con quién se comparten</h3><p>Con proveedores que hacen funcionar el servicio: Supabase (base de datos, cuentas y tiempo real; servidores en la nube que pueden estar fuera de México), Google (solo si eliges entrar con Google) y GitHub (aloja la página web; registra datos técnicos de visita). También con las personas con quienes tú compartes un enlace. No se venden ni se ceden a terceros para otros fines.</p>
 <h3>En tu dispositivo</h3><p>MusicFees guarda en tu navegador o en la app (almacenamiento local e IndexedDB) tus canciones, preferencias, versiones, papelera y la sesión. No usa cookies de rastreo ni herramientas de analítica o publicidad.</p>
+<h3>Audio que transcribes</h3><p>Cuando usas «Transcribir audio», el archivo o la grabación del micrófono se procesa por completo en tu dispositivo (el modelo de notas se descarga junto con la app y corre ahí). El audio no se sube a MusicFees, a Supabase ni a ningún otro servicio, y no se guarda: solo se guarda la canción que tú decides crear con el resultado. El micrófono se usa únicamente mientras grabas y lo puedes negar en los permisos del sistema.</p>
 <h3>Tus derechos (ARCO)</h3><p>Puedes acceder a tus datos, rectificarlos, cancelarlos u oponerte a su uso, y revocar tu consentimiento. Desde la app: Biblioteca → «Borrar mi cuenta» elimina tu cuenta, tus canciones en la nube y sus versiones. Para otras solicitudes, contacta al administrador que te dio tu cuenta o abre un reporte en github.com/ArtisTab25/MusicFees/issues (sin publicar datos personales en él). Se responderá en un plazo razonable conforme a la ley.</p>
 <h3>Conservación</h3><p>Tus datos se conservan mientras tengas cuenta. Al borrarla se eliminan de la base de datos; los respaldos automáticos del proveedor se eliminan en su ciclo normal. La papelera del dispositivo guarda canciones borradas 30 días.</p>
 <h3>Seguridad</h3><p>Se usan conexiones cifradas (HTTPS), contraseñas administradas por Supabase y reglas de acceso para que cada persona vea solo sus canciones. Ningún sistema es perfecto: protege tu contraseña y tus enlaces.</p>
 <h3>Cambios a este aviso</h3><p>Cualquier cambio se publicará en la app y en artistab25.github.io/MusicFees/legal.html con su nueva fecha.</p>
 <h2 id="autor">Derechos de autor y contenido de terceros</h2>
 <h3>Respeta la música de otros</h3><p>Transcribir, arreglar o compartir canciones protegidas puede requerir permiso de sus titulares. Usa MusicFees con música tuya, de dominio público o con permiso. Para estudio personal, no distribuyas copias de obras ajenas.</p>
+<h3>Transcripciones</h3><p>Transcribir una grabación crea una obra derivada de esa música. Transcribe solo música propia, de dominio público o que tengas permiso de usar, y no publiques ni compartas transcripciones de obras protegidas sin autorización de sus titulares. La transcripción automática es una aproximación: puede tener notas, ritmos, acordes o secciones equivocados, y no debe presentarse como la partitura oficial de ninguna obra.</p>
 <h3>Reportes</h3><p>Si alguien comparte por MusicFees contenido que infringe tus derechos, repórtalo en github.com/ArtisTab25/MusicFees/issues; el contenido se revisará y, en su caso, se retirará.</p>
 <h3>Pistas de muestra</h3><p>Las canciones de muestra de la biblioteca las escribió el autor de MusicFees y se incluyen solo para que pruebes la app. No las redistribuyas fuera de MusicFees.</p>
 <h3>Marcas</h3><p>Guitar Pro, MusicXML, MIDI, Google, Android, Supabase, GitHub y otras marcas mencionadas pertenecen a sus titulares. MusicFees no está afiliada ni patrocinada por ellos; los nombres se usan solo para describir formatos y servicios compatibles.</p>
@@ -53,6 +55,7 @@
 <h3>Bancos de sonido</h3><p>MuseScore General (MIT) y GeneralUser GS (licencia de su autor, uso libre) se descargan de sus fuentes oficiales o del sitio de MusicFees.</p>
 <h3>Archivos que importas</h3><p>Al importar un archivo (Guitar Pro, MusicXML) se procesa en tu dispositivo. Importa solo archivos que tengas derecho a usar.</p>
 <h3>Exportaciones</h3><p>El audio, PDF y archivos exportados pueden diferir del original por limitaciones de los formatos. Revísalos antes de usarlos en otro lugar.</p>
+<h3>Modelo de reconocimiento de notas</h3><p>El transcriptor usa Basic Pitch, un modelo de Spotify publicado con licencia Apache-2.0, ejecutado con TensorFlow.js (Apache-2.0). Sus archivos viven en models/basic-pitch con su licencia. El análisis de ritmo, batería, armonía, estructura, contrapunto y digitación son algoritmos propios de MusicFees.</p>
 <h2 id="colaboracion">Colaboración, comentarios y propuestas</h2>
 <h3>Edición en vivo</h3><p>Al compartir una canción, las demás personas ven tus cambios, tu cursor y tu nombre en tiempo real. Lo que escribas en comentarios y propuestas lo ve cualquiera con acceso a la canción.</p>
 <h3>Responsabilidad compartida</h3><p>Cada persona responde por lo que escribe. Ante desacuerdos sobre una canción, el dueño de la canción decide; usa el historial de versiones para recuperar lo anterior.</p>

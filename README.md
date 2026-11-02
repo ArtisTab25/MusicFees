@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 1.1** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 1.2** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,18 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Versión 1.2: transcripción, análisis y menú por módulos
+
+- **Transcribir audio** (Inicio o menú → Análisis y transcripción): una canción, una pista o una grabación del micrófono se convierte en una canción de MusicFees con una pista por parte (melodía, acordes, bajo y batería), cada una con su instrumento, en tablatura y partitura. Incluye tempo, compás, tonalidad (armadura), acordes con diagrama, secciones con nombre (Intro, Verso, Coro, Puente…) y un análisis guardado con la canción. Los compases dudosos quedan marcados con 💬. Todo se procesa en el dispositivo; el audio no se sube.
+  - Notas: modelo **Basic Pitch** de Spotify (Apache-2.0) con TensorFlow.js en un worker, acelerado con **WebAssembly SIMD** (~10× más rápido que JavaScript puro; medido 3 s contra 33 s para 20 s de audio en computadora). WebGL y CPU quedan de respaldo.
+  - **Algoritmos propios** (`src/transcribe/`): tempo por autocorrelación con preferencia por tempos comunes y tiempos por programación dinámica; compás (3 o 4) y primer tiempo fuerte por acentos (bajo, cambios de armonía y golpe); batería por separación armónico/percusiva (filtros de mediana) y clasificación de cada golpe por bandas; quita armónicos fantasma y saltos de octava; reparte bajo, melodía y acordes; tonalidad con perfiles de Krumhansl-Kessler; acordes con plantillas + bajo + tonalidad suavizados con Viterbi (cambian sobre todo al inicio del compás) e inversiones; limpieza de la pista de acordes guiada por la armonía; estructura por autosimilitud y novedad ajustada a frases de 4 compases; cuantización por tiempo (semicorcheas o tresillos, lo que mejor encaje); **digitación óptima por Viterbi** (apertura de mano, saltos, cuerdas al aire) y elección de afinación (Drop D, Re, Drop C) cuando hay notas graves.
+  - Para el teléfono: recorte por segundos (un fragmento tarda mucho menos) y sensibilidad ajustable.
+- **Analizar esta canción**: tonalidad, acordes con su grado (I, vi, IV, V…), forma y **contrapunto** entre dos pistas (movimiento contrario/oblicuo/directo/paralelo, quintas y octavas paralelas, disonancias en tiempo fuerte y su resolución). Puede escribir los acordes (con diagrama en guitarra), marcar las secciones, poner la armadura y guardar el análisis con la canción. Sirve también con tus archivos de Guitar Pro.
+- **Menú por módulos**: Archivo, Componer, Estructura, Pistas, Sonido y estudio, Análisis y transcripción, Colaborar, Vista y ayuda. Están todas las funciones de antes, agrupadas.
+- **Renovación visual**: superficies con profundidad, radios y espacios consistentes, tarjetas de módulo, reportes legibles. Alto contraste y botones grandes siguen funcionando.
+- **Fluidez**: el transcriptor y TensorFlow.js se cargan solo al usarlos (el arranque no creció); la franja de cuerdas/teclas ya no se reconstruye en cada tecla si no cambió.
+- **Android**: permiso de micrófono para grabar. **Avisos legales 1.2**: audio procesado en el dispositivo, transcripciones y derechos de autor, licencia del modelo (se vuelven a aceptar una vez).
 
 ## Versión 1.1
 
@@ -187,8 +199,9 @@ Al hacer push a `main`, el workflow `.github/workflows/pages.yml` prueba, compil
 - `src/score/model.ts`: el modelo es el `Score` de alphaTab. Cada cambio es una operación serializable (`Op`), que se aplica igual en el teléfono propio y en el del dúo.
 - `src/editor/`: el cursor, el historial (deshacer y rehacer) y la entrada de teclado. En Android se lee lo que inserta el teclado en un campo oculto con un texto centinela, porque `keydown` llega como "Unidentified".
 - `src/collab/cloud.ts`: Supabase RPC para guardar, y Realtime (broadcast y presencia) para las operaciones y los cursores. Mientras los dos están conectados, guarda en la base el "anfitrión".
+- `src/transcribe/`: transcriptor y análisis musical. Todo es puro (sin DOM) salvo `build.ts` y `ui.ts`; el trabajo pesado corre en `worker.ts`. Pruebas en `tests/transcribe.test.ts`.
 - `src/export/exporters.ts`: GP7 (`Gp7Exporter`), MIDI, PDF (render en canvas paginado entre sistemas) y audio (`exportAudio` de alphaTab + LAME).
 
 ## Licencias de terceros
 
-alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0) · Tone.js (MIT) · spessasynth_lib (Apache-2.0) · @webaudiomodules/sdk (MIT) · plugins WAM de burns-audio (MIT).
+Basic Pitch de Spotify (Apache-2.0, `public/models/basic-pitch`) · TensorFlow.js (Apache-2.0) · alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0) · Tone.js (MIT) · spessasynth_lib (Apache-2.0) · @webaudiomodules/sdk (MIT) · plugins WAM de burns-audio (MIT).

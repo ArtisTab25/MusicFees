@@ -331,9 +331,16 @@ function togglePalette(id: string | null) {
 }
 
 // ---------- franja de contexto: cuerdas, teclado de piano o kit ----------
+/** Firma de lo que muestra la franja: si no cambió, no se reconstruye (refresh corre en cada tecla). */
+let ctxKey = "";
 function renderCtx() {
-  ctxStrip.replaceChildren();
   const tr = ed.track, kind = kindOf(tr), beat = ed.beat;
+  if (kind !== "drums") {
+    const key = `${ed.cursor.t}|${kind}|${ed.cursor.row}|${ed.octave}|${tr.staves[0].tuning.join()}|${beat?.notes.map((n) => `${n.string}:${n.fret}:${n.realValue}`).join() ?? ""}`;
+    if (key === ctxKey && ctxStrip.childElementCount) return;
+    ctxKey = key;
+  } else ctxKey = "";
+  ctxStrip.replaceChildren();
   if (kind === "tab") {
     const tun = tr.staves[0].tuning;
     tun.forEach((m, row) => {
