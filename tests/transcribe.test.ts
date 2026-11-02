@@ -146,3 +146,70 @@ test("análisis de una partitura: tonalidad, acordes y contrapunto entre pistas"
   assert.equal(a.key.tonic, 0);
   assert.deepEqual(a.chords.filter((c) => c.root >= 0).slice(0, 4).map((c) => c.name), ["C", "Am", "F", "G"]);
 });
+
+// ---------- 1.3: separación, batería por piezas, timbre ----------
+import { transcribeDrums, GM } from "../src/transcribe/drums";
+import { splitOther, cleanLine } from "../src/transcribe/timbre";
+import { separateStem, toMono22k } from "../src/transcribe/separate";
+
+test("separación: STFT/ISTFT sin pérdidas cuando el modelo devuelve su entrada", async () => {
+  const n = 44100 * 3, L = new Float32Array(n), R = new Float32Array(n);
+  for (let i = 0; i < n; i++) { L[i] = Math.sin(i * 0.05) * 0.5; R[i] = Math.sin(i * 0.031) * 0.3; }
+  for (const nfft of [4096, 6144]) {
+    const [yl, yr] = await separateStem(L, R, nfft, async (x) => x);
+    let e = 0, s = 0;
+    for (let i = nfft; i < n - nfft; i++) { e += (yl[i] - L[i]) ** 2 + (yr[i] - R[i]) ** 2; s += L[i] ** 2 + R[i] ** 2; }
+    assert.ok(10 * Math.log10(s / e) > 60, `reconstrucción con FFT ${nfft}`);
+  }
+  assert.equal(toMono22k(L, R).length, Math.floor(n / 2));
+});
+
+test("batería: bombo, caja, toms por altura, hi-hat, crash y ride", () => {
+  const SR = 22050, T = 24, N = SR * T, x = new Float32Array(N);
+  let seed = 3; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  let hp = 0; const hpn = () => { const r = rnd(); const v = r - hp; hp = r; return v; };
+  const truth: { t: number; p: number }[] = [];
+  const add = (t: number, p: number, fn: (tt: number) => number, dur: number) => { truth.push({ t, p }); const i0 = Math.round(t * SR); for (let i = 0; i < dur * SR && i0 + i < N; i++) x[i0 + i] += fn(i / SR); };
+  const kick = (t: number) => { let ph = 0; add(t, GM.kick, (tt) => { ph += 2 * Math.PI * (50 + 70 * Math.exp(-tt * 35)) / SR; return 0.8 * Math.exp(-tt * 12) * Math.sin(ph); }, 0.35); };
+  const snare = (t: number) => add(t, GM.snare, (tt) => 0.45 * Math.exp(-tt * 18) * (0.8 * rnd() + 0.4 * Math.sin(2 * Math.PI * 200 * tt)), 0.25);
+  const tom = (t: number, f: number, p: number) => { let ph = 0; add(t, p, (tt) => { ph += 2 * Math.PI * f * (1 + 0.3 * Math.exp(-tt * 20)) / SR; return 0.6 * Math.exp(-tt * 5) * Math.sin(ph) + 0.05 * Math.exp(-tt * 30) * rnd(); }, 0.6); };
+  const hat = (t: number) => add(t, GM.hatClosed, (tt) => 0.25 * Math.exp(-tt * 60) * hpn(), 0.08);
+  const crash = (t: number) => add(t, GM.crash, (tt) => 0.35 * Math.exp(-tt * 2.2) * (hpn() * 0.8 + 0.2 * rnd()), 2.0);
+  const ride = (t: number) => add(t, GM.ride, (tt) => 0.18 * Math.exp(-tt * 4) * (hpn() * 0.6 + 0.4 * Math.sin(2 * Math.PI * 3800 * tt)), 0.9);
+  for (let b = 0; b < 12; b++) {
+    const t0 = b * 2;
+    if (b % 4 === 3) { kick(t0); crash(t0); snare(t0 + 0.5); tom(t0 + 1, 220, GM.highTom); tom(t0 + 1.25, 150, GM.midTom); tom(t0 + 1.5, 95, GM.floorTom); tom(t0 + 1.75, 95, GM.floorTom); continue; }
+    for (let k = 0; k < 4; k++) (k % 2 ? snare : kick)(t0 + k * 0.5);
+    for (let k = 0; k < 8; k++) (b >= 6 ? ride : hat)(t0 + k * 0.25);
+  }
+  const got = transcribeDrums(x, SR);
+  const recall = (p: number) => { const T1 = truth.filter((x) => x.p === p); return T1.filter((x) => got.some((g) => g.p === p && Math.abs(g.s - x.t) < 0.05)).length / T1.length; };
+  for (const [p, min] of [[GM.kick, 0.9], [GM.snare, 0.85], [GM.floorTom, 0.8], [GM.highTom, 0.6], [GM.crash, 0.6], [GM.ride, 0.5], [GM.hatClosed, 0.5]] as [number, number][])
+    assert.ok(recall(p) >= min, `pieza ${p}: ${recall(p).toFixed(2)}`);
+});
+
+test("lo demás: acordes de teclado (clusters y fuera de rango) y de guitarra se separan", () => {
+  const notes: RawNote[] = [];
+  for (let k = 0; k < 16; k++) {
+    const t = k * 0.5;
+    if (k < 8) for (const p of [48, 52, 55, 60, 64]) notes.push({ s: t, e: t + 0.45, p, a: 0.6 }); // guitarra: Do abierto
+    else for (const p of [36, 60, 62, 64, 65, 67, 71, 84]) notes.push({ s: t, e: t + 0.45, p, a: 0.6 }); // teclado
+  }
+  const L = splitOther(notes, null, 0.5);
+  assert.ok(L.guitar.length >= 30 && L.keys.length >= 50, `guitarra ${L.guitar.length} teclado ${L.keys.length}`);
+  assert.ok(L.guitar.every((n) => n.s < 4) && L.keys.every((n) => n.s >= 4));
+});
+
+test("línea de voz: une pedazos de la misma nota y quita saltos de octava", () => {
+  const n = (s: number, e: number, p: number) => ({ s, e, p, a: 0.7 });
+  const line = cleanLine([n(0, 0.3, 60), n(0.33, 0.6, 60), n(0.7, 1, 62), n(1, 1.2, 76), n(1.2, 1.5, 64), n(1.5, 1.52, 50)], "high");
+  assert.deepEqual(line.map((x) => x.p), [60, 62, 64, 64]);
+  assert.ok(Math.abs(line[0].e - 0.6) < 1e-9);
+});
+
+test("bajo: YIN encuentra la nota y separa las repetidas", async () => {
+  const { trackBass } = await import("../src/transcribe/bassline");
+  const SR = 22050, x = new Float32Array(SR * 4), seq = [28, 28, 33, 33, 38, 38, 43, 43];
+  seq.forEach((p, k) => { const f = 440 * 2 ** ((p - 69) / 12); for (let i = 0; i < SR * 0.45; i++) { const t = i / SR; x[k * SR / 2 + i] += 0.5 * Math.exp(-t * 3) * (Math.sin(2 * Math.PI * f * t) + 0.5 * Math.sin(4 * Math.PI * f * t)); } });
+  assert.deepEqual(trackBass(x, SR).map((n) => n.p), seq);
+});

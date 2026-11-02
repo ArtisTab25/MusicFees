@@ -5,6 +5,8 @@ import { beatChroma, detectKey, recognizeChords } from "./harmony";
 import { findSections } from "./form";
 import { meterAndDownbeat, valueAt } from "./rhythm";
 import { removeOvertones, splitRoles } from "./parts";
+import { cleanLine, splitOther } from "./timbre";
+import type { StemNotes } from "./types";
 import { analyzeCounterpoint, type VNote } from "./counterpoint";
 
 /** Posición en tiempos (negras, con decimales) de un instante, según la lista de tiempos. */
@@ -38,10 +40,19 @@ export interface AudioFeatures {
 export function analyzeNotes(input: {
   notes: RawNote[]; drums?: RawNote[]; beats: number[]; duration: number; tempo: number;
   mode: "mix" | "solo"; meter?: 3 | 4; downbeat?: number; audio?: AudioFeatures;
+  /** Si la mezcla se separó: notas de cada fuente (entonces `notes` se ignora). */
+  stems?: StemNotes;
 }): Analysis {
-  const { notes, beats, duration, tempo, mode, audio } = input;
+  const { beats, duration, tempo, mode, audio, stems } = input;
+  // Con fuentes separadas: la voz y el bajo son líneas de una sola nota; lo demás, polifónico.
+  const sp = beats.length > 1 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : 0.5;
+  const vocals = stems ? cleanLine(removeOvertones(stems.vocals), "high", 0.1) : [];
+  // El bajo ya viene cortado por golpes (YIN): no se unen notas repetidas.
+  const bassLine = stems ? cleanLine(stems.bass.filter((n) => n.p <= 67), "low", 0.07, false) : [];
+  const other = stems ? removeOvertones(stems.other) : [];
+  const notes = stems ? [...other, ...bassLine] : input.notes;
   // Del audio: fuera los armónicos fantasma antes de todo lo demás.
-  const pitched = (audio ? removeOvertones(notes) : notes).filter((n) => n.e > n.s);
+  const pitched = (audio && !stems ? removeOvertones(notes) : notes).filter((n) => n.e > n.s);
   const { chroma, bass, energy } = beatChroma(pitched, beats);
   // Compás y primer tiempo fuerte
   let meter = input.meter, downbeat = input.downbeat ?? 0;
@@ -58,6 +69,7 @@ export function analyzeNotes(input: {
   // Tonalidad: histograma de clases de altura ponderado por duración y fuerza.
   const hist = new Array(12).fill(0);
   for (const n of pitched) hist[((n.p % 12) + 12) % 12] += (n.e - n.s) * (0.3 + n.a) * (n.p < 48 ? 0.6 : 1);
+  for (const n of vocals) hist[((n.p % 12) + 12) % 12] += (n.e - n.s) * 0.5; // la melodía cantada también define la tonalidad
   const key = detectKey(hist);
   // Acordes: la probabilidad de cambio depende de dónde cae el tiempo en el compás.
   const strength = beats.map((_, k) => {
@@ -85,7 +97,17 @@ export function analyzeNotes(input: {
   const parts: Part[] = [];
   let counterpoint = null;
   const q = (t: number) => beatPos(beats, t) - off;
-  if (mode === "mix") {
+  if (stems) {
+    if (vocals.length >= 4) parts.push({ role: "vocals", notes: vocals, hint: "voice" });
+    const L = splitOther(other, stems.otherTimbre && stems.otherTimbre.length === stems.other.length ? alignTimbre(stems.other, other, stems.otherTimbre) : null, sp);
+    if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead });
+    if (L.guitar.length) parts.push({ role: "guitar", notes: cleanHarmony(L.guitar, chords, beats, !!bassLine.length), hint: L.hints.guitar });
+    if (L.keys.length) parts.push({ role: "keys", notes: cleanHarmony(L.keys, chords, beats, !!bassLine.length), hint: L.hints.keys });
+    if (bassLine.length) parts.push({ role: "bass", notes: bassLine });
+    const toV = (ns: RawNote[]): VNote[] => ns.map((n) => ({ q0: Math.round(q(n.s) * 4) / 4, q1: Math.round(q(n.e) * 4) / 4, p: n.p })).filter((n) => n.q1 > n.q0);
+    const top = vocals.length >= 4 ? vocals : L.lead;
+    if (top.length && bassLine.length) counterpoint = analyzeCounterpoint(toV(top), toV(bassLine), meter, [vocals.length >= 4 ? "Voz" : "Melodía", "Bajo"]);
+  } else if (mode === "mix") {
     const r = splitRoles(pitched);
     if (r.melody.length) parts.push({ role: "melody", notes: r.melody });
     if (r.harmony.length) parts.push({ role: "harmony", notes: cleanHarmony(r.harmony, chords, beats, !!r.bass.length) });
@@ -128,6 +150,13 @@ function cleanHarmony(notes: RawNote[], chords: import("./types").ChordSeg[], be
     const inChord = (CT[c.type] ?? [0, 4, 7]).some((iv) => (c.root + iv) % 12 === ((n.p % 12) + 12) % 12);
     return inChord || n.a >= 0.55 || n.e - n.s >= spb;
   });
+}
+
+/** `removeOvertones` puede quitar notas: se conserva el timbre de las que quedan. */
+function alignTimbre<T>(orig: RawNote[], kept: RawNote[], tim: T[]): T[] {
+  const key = (n: RawNote) => `${n.s.toFixed(4)}|${n.p}`;
+  const m = new Map(orig.map((n, i) => [key(n), tim[i]]));
+  return kept.map((n) => m.get(key(n))!);
 }
 
 function rmsAt(rms: Float32Array, t: number) { return rms[Math.min(rms.length - 1, Math.max(0, Math.floor(t)))] ?? 0; }

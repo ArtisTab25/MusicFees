@@ -1,5 +1,5 @@
 {
-  "version": "1.2",
+  "version": "1.3",
   "updated": "2 de noviembre de 2026",
   "summary": "MusicFees es una herramienta gratuita para escribir, escuchar y compartir música entre un grupo pequeño de personas. Al usarla aceptas estos avisos. Léelos completos; aquí van los puntos clave: se ofrece tal cual y sin garantías; tú eres responsable de lo que escribes, subes y compartes; respeta los derechos de autor; tus datos se usan solo para que la app funcione; puedes borrar tu cuenta cuando quieras.",
   "sections": [
@@ -91,7 +91,7 @@
         ],
         [
           "Audio que transcribes",
-          "Cuando usas «Transcribir audio», el archivo o la grabación del micrófono se procesa por completo en tu dispositivo (el modelo de notas se descarga junto con la app y corre ahí). El audio no se sube a MusicFees, a Supabase ni a ningún otro servicio, y no se guarda: solo se guarda la canción que tú decides crear con el resultado. El micrófono se usa únicamente mientras grabas y lo puedes negar en los permisos del sistema."
+          "Cuando usas «Transcribir audio», el archivo o la grabación del micrófono se procesa por completo en tu dispositivo (los modelos de notas y de separación corren ahí; los de separación se descargan una vez y quedan guardados). El audio no se sube a MusicFees, a Supabase ni a ningún otro servicio, y no se guarda: solo se guarda la canción que tú decides crear con el resultado. El micrófono se usa únicamente mientras grabas y lo puedes negar en los permisos del sistema."
         ],
         [
           "Tus derechos (ARCO)",
@@ -162,8 +162,8 @@
           "El audio, PDF y archivos exportados pueden diferir del original por limitaciones de los formatos. Revísalos antes de usarlos en otro lugar."
         ],
         [
-          "Modelo de reconocimiento de notas",
-          "El transcriptor usa Basic Pitch, un modelo de Spotify publicado con licencia Apache-2.0, ejecutado con TensorFlow.js (Apache-2.0). Sus archivos viven en models/basic-pitch con su licencia. El análisis de ritmo, batería, armonía, estructura, contrapunto y digitación son algoritmos propios de MusicFees."
+          "Modelos del transcriptor",
+          "El transcriptor usa Basic Pitch, un modelo de Spotify publicado con licencia Apache-2.0, ejecutado con TensorFlow.js (Apache-2.0), y, en la calidad «Fiel», los modelos de separación MDX-Net de KUIELab (licencia MIT, en la versión ONNX que publica el proyecto Ultimate Vocal Remover), ejecutados con ONNX Runtime Web (MIT). Los modelos de separación (~110 MB) se descargan una vez desde el sitio de MusicFees y se guardan en tu dispositivo. El reparto de guitarras y teclados, la lectura de la batería, el ritmo, la armonía, la estructura, el contrapunto y la digitación son algoritmos propios de MusicFees."
         ]
       ]
     },

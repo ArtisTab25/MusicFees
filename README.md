@@ -2,7 +2,7 @@
 
 Tablaturas y partituras multipista, al estilo Guitar Pro, pensadas para el teléfono, con sonido real y edición en dúo en vivo.
 
-**Versión 1.2** · web (funciona en el navegador del teléfono y se puede instalar como app).
+**Versión 1.3** · web (funciona en el navegador del teléfono y se puede instalar como app).
 
 ## Qué hace
 
@@ -46,6 +46,17 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 - **Metrónomo y cuenta inicial** funcionan con el motor de estudio, siguiendo los cambios de tempo y compás y las repeticiones. Al exportar, el metrónomo se suma limpio después del masterizado (no pasa por los efectos).
 
 Todo se guarda con la canción.
+
+## Versión 1.3: transcripción «Fiel» con separación de fuentes
+
+- **Calidad «Fiel»** (predeterminada en Transcribir audio): antes de transcribir, la mezcla se separa en **voz, batería, bajo y lo demás** con los modelos MDX-Net de KUIELab (Music Demixing Challenge 2021, MIT; versión ONNX de Ultimate Vocal Remover), ejecutados en el dispositivo con **ONNX Runtime Web** (WebGPU si el navegador lo tiene; si no, WebAssembly). Los modelos (~106 MB con el motor) se bajan una vez y quedan guardados. «Rápida» sigue disponible.
+  - Cada fuente se transcribe por separado: la **voz** como línea de una sola nota (solo donde realmente se canta), el **bajo** igual, y **lo demás** se reparte entre **línea principal** (solo, riff, melodía de sinte), **guitarra** y **teclado** según el timbre (cómo se apaga la nota, brillo, ataque) y si el acorde se puede tocar en una guitarra. Cada parte sugiere su instrumento (eléctrica limpia, overdrive o distorsión; piano, Rhodes, órgano o pad).
+  - **Batería pieza por pieza** sobre la batería separada: bombo, caja, **toms** (de piso, medio y agudo, agrupados por su altura), hi-hat cerrado y abierto, **crash** y **ride**.
+  - **Acordes** con la guitarra/teclado y el bajo ya separados (mucho más limpios), escritos **en todas las pistas**, con diagrama en las guitarras de afinación estándar.
+  - **Rejilla rítmica por pista**: corcheas, semicorcheas o tresillos según lo que toca cada instrumento (los acordes ya no se llenan de semicorcheas por imprecisiones de milisegundos).
+  - **Digitación**: se queda en una posición de la mano y evita trastes altos sueltos.
+- Pruebas con las pistas propias de Brayand (separadas y analizadas) y 26 pruebas automáticas.
+- Tiempo: la separación es lo más pesado. En una computadora, unos 18 s por cada 12 s de audio y por modelo con WebAssembly; en el teléfono, más. Para canciones completas en el celular conviene un fragmento (30–60 s) o la calidad «Rápida».
 
 ## Versión 1.2: transcripción, análisis y menú por módulos
 
@@ -204,4 +215,4 @@ Al hacer push a `main`, el workflow `.github/workflows/pages.yml` prueba, compil
 
 ## Licencias de terceros
 
-Basic Pitch de Spotify (Apache-2.0, `public/models/basic-pitch`) · TensorFlow.js (Apache-2.0) · alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0) · Tone.js (MIT) · spessasynth_lib (Apache-2.0) · @webaudiomodules/sdk (MIT) · plugins WAM de burns-audio (MIT).
+Basic Pitch de Spotify (Apache-2.0, `public/models/basic-pitch`) · TensorFlow.js (Apache-2.0) · MDX-Net de KUIELab (MIT; se descargan al compilar con `scripts/models.mjs`) · ONNX Runtime Web (MIT) · alphaTab (MPL-2.0) · Bravura (SIL OFL 1.1) · GeneralUser GS v1.471 de S. Christian Collins (uso libre, incluso comercial; ver `public/soundfont/GeneralUser-GS-LICENSE.txt`) · supabase-js (MIT) · jsPDF (MIT) · lamejs (LGPL-3.0) · Tone.js (MIT) · spessasynth_lib (Apache-2.0) · @webaudiomodules/sdk (MIT) · plugins WAM de burns-audio (MIT).

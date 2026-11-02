@@ -81,8 +81,8 @@ function enumerate(ps: number[], S: number, open: (s: number) => number, maxFret
       const strs = cur.map((n) => n.str).sort((a, b) => a - b);
       let skips = 0;
       for (let k = 1; k < strs.length; k++) skips += strs[k] - strs[k - 1] - 1;
-      let cost = 0.035 * mn + 0.3 * (mx - mn) + (mn >= 5 && opens ? 0.7 : 0) - (mn <= 3 ? 0.1 * opens : 0) + 0.15 * skips;
-      for (const f of fr) if (f > 15) cost += 0.12 * (f - 15);
+      let cost = 0.05 * mn + 0.3 * (mx - mn) + (mn >= 5 && opens ? 0.7 : 0) - (mn <= 3 ? 0.1 * opens : 0) + 0.15 * skips;
+      for (const f of fr) { if (f > 12) cost += 0.08 * (f - 12); if (f > 15) cost += 0.15 * (f - 15); }
       if (fr.length > 4) cost += 0.25 * (fr.length - 4); // más de 4 dedos: hace falta cejilla
       out.push({ notes: cur.map((n) => ({ ...n })), pos: fr.length ? mn : -1, cost });
       return;
@@ -107,7 +107,7 @@ function enumerate(ps: number[], S: number, open: (s: number) => number, maxFret
 function move(a: Cand, b: Cand): number {
   if (a.pos < 0 || b.pos < 0) return 0; // cuerdas al aire: la mano queda libre
   const d = Math.abs(a.pos - b.pos);
-  let c = 0.12 * d + (d > 5 ? 0.5 : 0);
+  let c = 0.2 * d + (d > 4 ? 0.6 : 0);
   // Una misma nota repetida se toca en la misma cuerda.
   if (a.notes.length === 1 && b.notes.length === 1 && a.notes[0].pitch === b.notes[0].pitch && a.notes[0].str !== b.notes[0].str) c += 0.3;
   return c;

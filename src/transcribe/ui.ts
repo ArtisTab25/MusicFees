@@ -7,25 +7,26 @@ import { analysisOf, kindOf, type Op, type SongAnalysis } from "../score/model";
 import { CHORDS, voicings } from "../score/chords";
 import { TUNINGS } from "../score/instruments";
 import { ARTIFACT } from "../config";
+import { downloadPack, hasPack } from "../player/downloads";
+import { SEP_MB, SEP_PACKS } from "./packs";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
 import { analyzeScore } from "./symbolic";
 import type { Analysis, Role, TranscribeOpts } from "./types";
 import type { WorkerIn, WorkerOut } from "./worker";
 
-const SR = 22050;
+const SR = 44100;
 const MAX_SECONDS = 8 * 60;
 
-/** Decodifica cualquier audio (o video) a mono a 22 050 Hz, lo que pide el modelo de notas. */
-async function decode(buf: ArrayBuffer): Promise<Float32Array> {
-  const ctx = new OfflineAudioContext(1, 1, SR);
+/** Decodifica cualquier audio (o video) a estéreo 44.1 kHz (lo que piden los modelos de separación). */
+async function decode(buf: ArrayBuffer): Promise<[Float32Array, Float32Array]> {
+  const ctx = new OfflineAudioContext(2, 1, SR);
   const ab = await ctx.decodeAudioData(buf);
-  const n = ab.length, out = new Float32Array(n);
-  for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / ab.numberOfChannels; }
-  if (ab.sampleRate === SR) return out;
+  const L = ab.getChannelData(0).slice(), R = (ab.numberOfChannels > 1 ? ab.getChannelData(1) : ab.getChannelData(0)).slice();
+  if (ab.sampleRate === SR) return [L, R];
   // Por si el navegador no remuestreó: interpolación lineal.
-  const ratio = ab.sampleRate / SR, m = Math.floor(n / ratio), res = new Float32Array(m);
-  for (let i = 0; i < m; i++) { const x = i * ratio, k = Math.floor(x), f = x - k; res[i] = out[k] * (1 - f) + (out[k + 1] ?? 0) * f; }
-  return res;
+  const ratio = ab.sampleRate / SR, m = Math.floor(L.length / ratio);
+  const rs = (x: Float32Array) => { const o = new Float32Array(m); for (let i = 0; i < m; i++) { const p = i * ratio, k = Math.floor(p), f = p - k; o[i] = x[k] * (1 - f) + (x[k + 1] ?? 0) * f; } return o; };
+  return [rs(L), rs(R)];
 }
 
 const presetSelect = (sel: string, kinds?: string[]) => h("select", null, Object.entries(PRESETS.filter((p) => !kinds || kinds.includes(p.kind)).reduce((m, p) => { (m[p.group] ??= []).push(p); return m; }, {} as Record<string, typeof PRESETS>))
@@ -34,7 +35,7 @@ const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60
 
 // ---------- transcribir ----------
 export function transcribeSheet(sheets: Sheets, c: AppCtx) {
-  let pcm: Float32Array | null = null, name = "";
+  let pcm: [Float32Array, Float32Array] | null = null, name = "";
   let worker: Worker | null = null;
   const status = h("p", { class: "note", role: "status" }, "Elige una canción, pista o grabación. Se procesa en tu dispositivo: el audio no se sube a ningún lado.");
   const file = h("input", { type: "file", accept: "audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.webm,.mp4", "aria-label": "Archivo de audio", onchange: async () => {
@@ -74,7 +75,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       pcm = await decode(buf);
       name = n;
       title.value = n || "Transcripción";
-      const dur = pcm.length / SR;
+      const dur = pcm[0].length / SR;
       to.value = String(Math.ceil(Math.min(dur, MAX_SECONDS)));
       to.max = String(Math.ceil(dur));
       trim.hidden = false;
@@ -90,26 +91,61 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
   const soloSel = presetSelect("gtr_steel", ["tab", "notation"]);
   const soloField = h("div", { class: "field", hidden: true }, h("label", null, "Instrumento"), soloSel);
   const drums = h("input", { type: "checkbox", checked: true, id: "tr-drums" });
-  const drumsRow = h("label", { class: "inline", for: "tr-drums" }, drums, "Detectar la batería (bombo, caja y hi-hat)");
+  const drumsRow = h("label", { class: "inline", for: "tr-drums" }, drums, "Detectar la batería (bombo, caja, toms, hi-hat, crash y ride)");
   function setMode(m: "mix" | "solo") {
     mode = m;
     [...modeBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String((i === 0) === (m === "mix"))));
     soloField.hidden = m === "mix"; drumsRow.hidden = m === "solo";
   }
+  // Calidad: «Fiel» separa la mezcla antes de transcribir (modelos de ~110 MB que se bajan una vez).
+  let faithful = c.prefs.trFaithful !== false;
+  const qBtns = h("div", { class: "menu-tabs", role: "group", "aria-label": "Calidad" },
+    h("button", { "aria-pressed": faithful, onclick: () => setQ(true) }, "Fiel"),
+    h("button", { "aria-pressed": !faithful, onclick: () => setQ(false) }, "Rápida"));
+  const qNote = h("p", { class: "note" });
+  const drawQ = async () => {
+    const have = (await Promise.all(Object.values(SEP_PACKS).map((p) => hasPack(p)))).every(Boolean);
+    qNote.textContent = faithful
+      ? `Separa voz, batería, bajo y lo demás con modelos de separación (MDX-Net) y transcribe cada uno por separado: reconoce la voz, guitarras y teclados, toms y platillos. ${have ? "Modelos ya descargados." : `Descarga ${Math.round(SEP_MB)} MB una sola vez.`} Tarda bastante más: en el teléfono usa un fragmento de 30–60 s.`
+      : "Transcribe la mezcla tal cual. Mucho más rápida, menos fiel cuando suenan varios instrumentos.";
+  };
+  function setQ(on: boolean) {
+    faithful = on; c.prefs.trFaithful = on; c.savePrefs();
+    [...qBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String((i === 0) === on)));
+    void drawQ();
+  }
+  void drawQ();
   const sens = h("input", { type: "range", min: 0, max: 100, value: 50, "aria-label": "Sensibilidad" });
   const mark = h("input", { type: "checkbox", checked: true, id: "tr-mark" });
   const title = h("input", { type: "text", value: "Transcripción", "aria-label": "Título" });
   const bar = h("progress", { max: 100, value: 0, hidden: true, style: "width:100%" });
   const cancel = h("button", { class: "ghost", hidden: true, onclick: () => { worker?.terminate(); worker = null; busy(false); status.textContent = "Cancelado."; } }, "Cancelar");
-  const go = h("button", { class: "primary", disabled: true, onclick: () => run() }, "Transcribir");
+  const go = h("button", { class: "primary", disabled: true, onclick: () => void run() }, "Transcribir");
   function busy(on: boolean) { bar.hidden = !on; cancel.hidden = !on; go.disabled = on; file.disabled = on; recBtn.disabled = on; }
-  function run() {
+  async function run() {
     if (!pcm) return;
-    const a = Math.max(0, Number(from.value) || 0), b = Math.min(pcm.length / SR, Math.max(a + 2, Number(to.value) || pcm.length / SR), a + MAX_SECONDS);
-    const slice = pcm.slice(Math.floor(a * SR), Math.floor(b * SR));
-    const opts: TranscribeOpts = { mode, presets: mode === "solo" ? { all: soloSel.value } : {}, drums: mode === "mix" && drums.checked, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: title.value.trim() || name || "Transcripción" };
+    const len = pcm[0].length / SR;
+    const a = Math.max(0, Number(from.value) || 0), b = Math.min(len, Math.max(a + 2, Number(to.value) || len), a + MAX_SECONDS);
+    const L = pcm[0].slice(Math.floor(a * SR), Math.floor(b * SR)), R = pcm[1].slice(Math.floor(a * SR), Math.floor(b * SR));
+    const useSep = faithful && mode === "mix";
+    const opts: TranscribeOpts = { mode, separate: useSep, presets: mode === "solo" ? { all: soloSel.value } : {}, drums: mode === "mix" && drums.checked, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: title.value.trim() || name || "Transcripción" };
     busy(true);
     status.textContent = "Preparando…";
+    // Modo fiel: los modelos se bajan una vez (con avance) y se pasan al proceso de fondo.
+    let sep: WorkerIn["sep"];
+    if (useSep) {
+      try {
+        const packs = Object.entries(SEP_PACKS) as [keyof typeof SEP_PACKS, (typeof SEP_PACKS)[keyof typeof SEP_PACKS]][];
+        const got: Record<string, ArrayBuffer> = {};
+        let doneMb = 0;
+        for (const [k, p] of packs) {
+          const bytes = await downloadPack(p, (pct) => { bar.value = Math.round(((doneMb + (p.mb * pct) / 100) / SEP_MB) * 100); status.textContent = `Descargando modelos de separación (una sola vez)… ${Math.round(doneMb + (p.mb * pct) / 100)} de ${Math.round(SEP_MB)} MB`; });
+          got[k] = bytes.slice().buffer; // copia: el original queda guardado
+          doneMb += p.mb;
+        }
+        sep = got as NonNullable<WorkerIn["sep"]>;
+      } catch (e) { busy(false); status.textContent = `${(e as Error).message} Puedes usar la calidad «Rápida» mientras tanto.`; return; }
+    }
     worker?.terminate();
     worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
     const modelUrl = new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
@@ -117,26 +153,27 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       const m = e.data;
       if (m.type === "progress") { bar.value = m.pct; status.textContent = m.msg; }
       else if (m.type === "error") { busy(false); worker?.terminate(); worker = null; status.textContent = `No se pudo transcribir: ${m.message}`; }
-      else { busy(false); worker?.terminate(); worker = null; result(sheets, c, m.analysis, opts, `${(m.ms / 1000).toFixed(0)} s · ${m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
+      else { busy(false); worker?.terminate(); worker = null; const mins = m.ms / 60000; result(sheets, c, m.analysis, opts, `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
     };
     worker.onerror = (e) => { busy(false); status.textContent = `No se pudo transcribir: ${e.message || "error del proceso"}`; };
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
-    const msg: WorkerIn = { pcm: slice, sr: SR, modelUrl, wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity };
-    worker.postMessage(msg, [slice.buffer]);
+    const msg: WorkerIn = { L, R, modelUrl, wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep };
+    worker.postMessage(msg, [L.buffer, R.buffer, ...(sep ? Object.values(sep) : [])]);
   }
   sheets.panel("Transcribir audio", "full",
     h("p", { class: "note" }, "Convierte una canción, una pista o una grabación en una canción de MusicFees: una pista por parte, con su instrumento, en tablatura y partitura, con tempo, compás, tonalidad, acordes, secciones y análisis."),
     h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, file, recBtn), status),
     trim,
     h("div", { class: "sec" }, h("h3", null, "Qué tiene la grabación"), modeBtns, soloField, drumsRow),
+    h("div", { class: "sec" }, h("h3", null, "Calidad"), qBtns, qNote),
     h("div", { class: "sec" }, h("h3", null, "Ajustes"),
       h("div", { class: "field" }, h("label", null, "Título"), title),
       h("div", { class: "field" }, h("label", null, "Sensibilidad"), sens),
       h("p", { class: "note" }, "Más sensibilidad encuentra notas suaves pero también ruido; menos deja solo las notas claras."),
       h("label", { class: "inline", for: "tr-mark" }, mark, "Marcar con 💬 los compases dudosos para revisarlos")),
     h("div", { class: "inline" }, go, cancel), bar,
-    h("p", { class: "note" }, "Cómo funciona: un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha las alturas; los algoritmos propios de MusicFees encuentran el pulso y el compás, separan bajo, acordes, melodía y batería, reconocen tonalidad y acordes, la estructura y el contrapunto, y eligen la digitación más cómoda en el diapasón. El resultado es un borrador muy completo: revísalo y corrígelo en el editor."),
+    h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», modelos de separación MDX-Net (KUIELab, MIT) aíslan voz, batería y bajo; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
     h("p", { class: "note" }, "Transcribe solo música propia o que tengas derecho a usar."));
 }
 

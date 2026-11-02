@@ -18,6 +18,11 @@ const drop = ["font/Bravura.svg", "font/Bravura.eot", "font/Bravura.otf", "font/
 for (const f of drop) rmSync(join(OUT, f), { force: true });
 renameSync(join(OUT, "soundfont/GeneralUser-GS.sf3"), join(OUT, "soundfont/GeneralUser-GS.sf3.ogg"));
 for (const f of readdirSync(join(OUT, "samples"))) renameSync(join(OUT, "samples", f), join(OUT, "samples", `${f}.ogg`));
+// Modelos de separación y motor ONNX (partes de 15 MB): también como .ogg.
+for (const d of ["models/mdx/vocals", "models/mdx/drums", "models/mdx/bass", "models/ort"]) {
+  const dir = join(OUT, d);
+  if (existsSync(dir)) for (const f of readdirSync(dir)) if (f.endsWith(".bin")) renameSync(join(dir, f), join(dir, `${f}.ogg`));
+}
 // Modelo de notas del transcriptor: los pesos (.bin) viajan como .ogg y un model.art.json apunta a ellos.
 const BP = join(OUT, "models/basic-pitch");
 if (existsSync(BP)) {

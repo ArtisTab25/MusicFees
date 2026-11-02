@@ -573,7 +573,7 @@ export class Sheets {
       ],
       Ayuda: [
         item("Atajos de teclado", "", () => this.help()),
-        item("Acerca de MusicFees", "Versión 1.2", () => this.about()),
+        item("Acerca de MusicFees", "Versión 1.3", () => this.about()),
         item("Licencias", "Programas y recursos de terceros", () => this.about("licencias")),
         item("Avisos legales", "Términos, privacidad, derechos de autor", () => this.about("avisos")),
       ],
@@ -854,7 +854,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.2 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.3 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 
@@ -1597,10 +1597,12 @@ export class Sheets {
       ["Basic Pitch (Spotify)", "Modelo de reconocimiento de notas del transcriptor", "Apache-2.0"],
       ["TensorFlow.js", "Ejecuta el modelo de notas en el dispositivo", "Apache-2.0"],
       ["@tonejs/midi", "Dependencia de Basic Pitch", "MIT"],
+      ["MDX-Net (KUIELab)", "Modelos de separación de voz, batería y bajo (publicados por Ultimate Vocal Remover)", "MIT"],
+      ["ONNX Runtime Web", "Ejecuta los modelos de separación en el dispositivo", "MIT"],
     ];
     const body: Record<typeof tab, HTMLElement[]> = {
       acerca: [
-        h("p", null, h("b", null, "MusicFees 1.2"), " — tablaturas y partituras multipista, con edición en dúo, comentarios, propuestas y transcripción de audio a pistas."),
+        h("p", null, h("b", null, "MusicFees 1.3"), " — tablaturas y partituras multipista, con edición en dúo, comentarios, propuestas y transcripción de audio a pistas."),
         P("Hecha en Comalcalco, Tabasco. Gratuita, sin anuncios y sin vender datos."),
         N("Código: github.com/ArtisTab25/MusicFees · Reportar un problema: github.com/ArtisTab25/MusicFees/issues"),
       ],

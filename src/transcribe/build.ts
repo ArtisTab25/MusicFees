@@ -3,7 +3,7 @@
 // con su instrumento, y escribe tempo, compás, armadura, secciones, acordes con diagrama y avisos.
 import * as at from "@coderline/alphatab";
 import { applyOp, createSong, finishScore, type ClipBeat, type ClipNote, type Op, type SongAnalysis } from "../score/model";
-import { pack, splitTicks } from "../score/structure";
+import { pack } from "../score/structure";
 import { clipTicks, restsFor } from "../score/clip";
 import { presetById, TUNINGS } from "../score/instruments";
 import { CHORDS, voicings } from "../score/chords";
@@ -14,12 +14,14 @@ import type { Analysis, Part, RawNote, Role, TranscribeOpts } from "./types";
 type Score = at.model.Score;
 const Q = 960;
 
-export const ROLE_NAMES: Record<Role, string> = { melody: "Melodía", harmony: "Acordes", bass: "Bajo", drums: "Batería", all: "Transcripción" };
+export const ROLE_NAMES: Record<Role, string> = { vocals: "Voz", melody: "Melodía", guitar: "Guitarra", keys: "Teclado", harmony: "Acordes", bass: "Bajo", drums: "Batería", all: "Transcripción" };
 
 /** Instrumento sugerido para cada parte (el usuario lo puede cambiar antes de crear la canción). */
 export function suggestPreset(part: Part): string {
   if (part.role === "drums") return "drums";
   if (part.role === "bass") return "bass_finger";
+  if (part.role === "vocals") return "voice";
+  if (part.hint) return part.hint;
   // Rango real sin los extremos sueltos (un armónico mal leído no cambia el instrumento).
   const ps = part.notes.map((n) => n.p).sort((a, b) => a - b);
   const low = ps[Math.floor(ps.length * 0.03)] ?? 60, high = ps[Math.floor(ps.length * 0.97)] ?? 60;
@@ -34,36 +36,38 @@ export function suggestPreset(part: Part): string {
 
 interface Ev { tick: number; end: number; pitches: number[]; amps: number[] }
 
-/** Rejilla por tiempo: 4 (semicorcheas) o 3 (tresillos de corchea), la que menos error deja. */
-function gridPerBeat(qs: number[], nBeats: number): number[] {
-  const g = new Array(nBeats + 2).fill(4);
+/**
+ * Rejilla por tiempo y por pista: corcheas (2), semicorcheas (4) o tresillos (3). Se elige la que
+ * deja menos error con un pequeño costo por cada subdivisión más fina, así una pista de acordes no se
+ * llena de semicorcheas por imprecisiones de milisegundos, pero un riff rápido sí las conserva.
+ */
+function gridPerBeat(qs: number[], nBeats: number, fineCost = 0.0025): number[] {
+  const g = new Array(nBeats + 2).fill(2);
   const byBeat = new Map<number, number[]>();
   for (const q of qs) { const j = Math.floor(q); const f = q - j; (byBeat.get(j) ?? byBeat.set(j, []).get(j)!).push(f); }
   for (const [j, fs] of byBeat) {
-    const err = (div: number) => fs.reduce((s, f) => { const d = f * div - Math.round(f * div); return s + d * d; }, 0) / div / div;
-    // Tresillo solo si mejora claramente y hay al menos dos ataques que lo usan.
-    const e4 = err(4), e3 = err(3);
-    const usesTriplet = fs.filter((f) => Math.abs(f * 3 - Math.round(f * 3)) < 0.12 && Math.round(f * 3) % 3 !== 0).length;
-    if (j >= 0 && j < g.length && e3 < e4 * 0.5 && usesTriplet >= 2) g[j] = 3;
+    if (j < 0 || j >= g.length) continue;
+    const cost = (div: number, pen: number) => fs.reduce((s, f) => { const d = (f * div - Math.round(f * div)) / div; return s + d * d + pen; }, 0);
+    const c2 = cost(2, 0), c4 = cost(4, fineCost), c3 = cost(3, fineCost * 1.6);
+    g[j] = c3 < c4 && c3 < c2 && fs.length >= 2 ? 3 : c4 < c2 ? 4 : 2;
   }
   return g;
 }
 
-function quantTick(q: number, grid: number[], coarse = false): number {
-  const j = Math.floor(q), g0 = grid[j] ?? 4, g = coarse && g0 === 4 ? 2 : g0;
+function quantTick(q: number, grid: number[]): number {
+  const j = Math.floor(q), g = grid[j] ?? 2;
   let sub = Math.round((q - j) * g), jj = j;
   if (sub >= g) { jj++; sub = 0; }
   return Math.max(0, jj * Q + sub * (Q / g));
 }
 
 /** Notas → eventos (acordes por ataque) en ticks. */
-function toEvents(notes: RawNote[], q: (t: number) => number, grid: number[], drums: boolean, coarse = false): Ev[] {
+function toEvents(notes: RawNote[], q: (t: number) => number, grid: number[], drums: boolean): Ev[] {
   const map = new Map<number, Ev>();
   for (const n of notes) {
-    const tick = quantTick(q(n.s), grid, coarse);
-    let end = quantTick(q(n.e), grid, coarse);
-    const g = grid[Math.floor(tick / Q)] ?? 4;
-    const step = Q / (coarse && g === 4 ? 2 : g);
+    const tick = quantTick(q(n.s), grid);
+    let end = quantTick(q(n.e), grid);
+    const step = Q / (grid[Math.floor(tick / Q)] ?? 2);
     if (drums) end = tick + Q; // un golpe dura hasta el siguiente (máx. un tiempo): corcheas legibles
     if (end <= tick) end = tick + step;
     const ev = map.get(tick) ?? { tick, end, pitches: [], amps: [] };
@@ -72,6 +76,17 @@ function toEvents(notes: RawNote[], q: (t: number) => number, grid: number[], dr
     map.set(tick, ev);
   }
   return [...map.values()].sort((a, b) => a.tick - b.tick);
+}
+
+/** Como splitTicks, pero sin doble puntillo (más fácil de leer en una transcripción). */
+const SIMPLE: { dur: number; dots: number; ticks: number }[] = [];
+for (const d of [1, 2, 4, 8, 16, 32]) for (const dots of [1, 0]) SIMPLE.push({ dur: d, dots, ticks: (3840 / d) * (dots ? 1.5 : 1) });
+SIMPLE.sort((a, b) => b.ticks - a.ticks);
+function splitSimple(ticks: number): { dur: number; dots: number }[] {
+  const out: { dur: number; dots: number }[] = [];
+  let left = ticks;
+  while (left > 0.5) { const s = SIMPLE.find((x) => x.ticks <= left + 0.5); if (!s) break; out.push({ dur: s.dur, dots: s.dots }); left -= s.ticks; }
+  return out;
 }
 
 /** Línea de tiempo (notas y silencios) → tiempos de MusicFees, partidos en los cambios de rejilla. */
@@ -87,7 +102,7 @@ function toClips(evs: Ev[], notesOf: (i: number) => ClipNote[], grid: number[], 
       const len = stop - cur;
       const pieces: { dur: number; dots: number; tup: number }[] = grid[j] === 3 && len % Q !== 0
         ? Array.from({ length: Math.round(len / 320) }, () => ({ dur: 8, dots: 0, tup: 3 }))
-        : splitTicks(len).map((d) => ({ ...d, tup: 0 }));
+        : splitSimple(len).map((d) => ({ ...d, tup: 0 }));
       // Dos tresillos de corchea seguidos con las mismas notas = una negra de tresillo.
       if (grid[j] === 3 && pieces.length === 2 && cur % 320 === 0) pieces.splice(0, 2, { dur: 4, dots: 0, tup: 3 });
       for (const p of pieces) {
@@ -127,20 +142,20 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
   const q = (t: number) => beatPos(a.beats, t) - off;
   const cap = a.meter * Q;
   const parts = a.parts.filter((p) => p.notes.length && (p.role !== "drums" || opts.drums));
-  const allQ = parts.flatMap((p) => p.notes.map((n) => q(n.s)));
   const nBeats = Math.ceil(Math.max(1, ...parts.flatMap((p) => p.notes.map((n) => q(n.e))))) + 1;
-  const grid = gridPerBeat(allQ, nBeats);
   const plan = parts.map((p) => {
     const presetId = opts.presets[p.role] ?? suggestPreset(p);
     const preset = presetById(presetId) ?? presetById("gtr_clean")!;
-    // Los acordes se leen mejor en corcheas: los ataques sueltos de un mismo rasgueo se juntan.
-    const evs = toEvents(p.notes, q, grid, preset.kind === "drums", p.role === "harmony");
-    // Melodía y bajo son una sola línea: una nota por ataque (la más aguda o la más grave).
-    if (p.role === "melody" || p.role === "bass") for (const ev of evs) {
+    // Rejilla propia de cada pista: los acordes pagan más por subdividir (se leen mejor en corcheas).
+    const chordal = p.role === "harmony" || p.role === "guitar" || p.role === "keys" || p.role === "all";
+    const grid = gridPerBeat(p.notes.map((n) => q(n.s)), nBeats, chordal ? 0.006 : p.role === "drums" ? 0.0015 : 0.003);
+    const evs = toEvents(p.notes, q, grid, preset.kind === "drums");
+    // Voz, melodía y bajo son una sola línea: una nota por ataque (la más aguda o la más grave).
+    if (p.role === "melody" || p.role === "bass" || p.role === "vocals") for (const ev of evs) {
       const k = ev.pitches.indexOf(p.role === "melody" ? Math.max(...ev.pitches) : Math.min(...ev.pitches));
       ev.pitches = [ev.pitches[k]]; ev.amps = [ev.amps[k]];
     }
-    return { part: p, preset, evs };
+    return { part: p, preset, evs, grid };
   });
   const lastTick = Math.max(cap, ...plan.flatMap((x) => x.evs.map((e) => e.end)));
   const nBars = Math.max(1, Math.ceil(lastTick / cap));
@@ -169,7 +184,7 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
       notesOf = (i) => x.evs[i].pitches.map((p, k) => ({ p, a: x.evs[i].amps[k] })).sort((m, n) => n.a - m.a).slice(0, 8).map((z) => ({ pitch: z.p, fx: [] }));
     }
     tunings.push(tuning);
-    const clips = toClips(x.evs, notesOf, grid, total, x.preset.kind === "drums");
+    const clips = toClips(x.evs, notesOf, x.grid, total, x.preset.kind === "drums");
     const bars = pack(clips, () => cap, x.preset.kind === "drums");
     while (bars.length < nBars) bars.push(restsFor(cap));
     clipBars.push(bars.slice(0, nBars));
@@ -183,10 +198,10 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
   }
   clipBars.forEach((bars, t) => bars.forEach((beats, b) => ops.push({ k: "setVoice", t, b, v: 0, beats })));
   for (const s of a.sections) if (s.b0 < nBars) ops.push({ k: "barProp", b: s.b0, prop: "section", val: `${s.label}|${s.name}` });
-  // Acordes: con diagrama en la guitarra de acordes (afinación estándar); en otro caso, como texto.
-  const ct = plan.findIndex((x) => x.part.role === "harmony" || x.part.role === "all");
-  if (ct >= 0) {
-    const x = plan[ct];
+  // Acordes: en todas las pistas con notas (se ven en la que estés viendo). Diagrama solo en guitarras
+  // de 6 cuerdas en afinación estándar; en las demás, el nombre.
+  plan.forEach((x, ct) => {
+    if (x.preset.kind === "drums") return;
     const std = x.preset.kind === "tab" && (tunings[ct] ?? x.preset.tuning ?? []).join() === TUNINGS.std.strings.join();
     const defined = new Set<string>();
     let lastName = "";
@@ -196,22 +211,26 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
       const b = Math.floor(tick / cap), pos = tick - b * cap;
       const beats = clipBars[ct][b];
       if (!beats) continue;
-      let acc = 0, idx = -1;
+      // El tiempo que empieza en el cambio (o el primero dentro de ese tiempo); si no, el que lo cubre.
+      let acc = 0, idx = -1, cover = -1;
       for (let i = 0; i < beats.length; i++) {
-        if (acc >= pos - 0.5 && acc < pos + Q && beats[i].notes.length && !beats[i].notes.every((n) => n.fx.includes("tie"))) { idx = i; break; }
-        acc += clipTicks(beats[i]);
+        const len = clipTicks(beats[i]);
+        if (acc >= pos - 0.5 && acc < pos + Q) { idx = i; break; }
+        if (acc <= pos && acc + len > pos) cover = i;
+        acc += len;
       }
+      if (idx < 0) idx = cover;
       if (idx < 0) continue;
       lastName = c.name;
-      if (std) {
+      if (!defined.has(c.name)) {
         const type = CHORDS.find((k) => k.k === (c.type === "m7b5" ? "m7♭5" : c.type));
-        const v = type ? voicings(c.root, type)[0] : null;
-        if (v && !defined.has(c.name)) { ops.push({ k: "chordDef", t: ct, id: c.name, name: c.name, frets: v.frets }); defined.add(c.name); }
-        if (v) { ops.push({ k: "beatFx", t: ct, b, v: 0, i: idx, fx: "chord", val: c.name }); continue; }
+        const v = std && type ? voicings(c.root, type)[0] : null;
+        ops.push({ k: "chordDef", t: ct, id: c.name, name: c.name, frets: v ? v.frets : [], diagram: !!v });
+        defined.add(c.name);
       }
-      ops.push({ k: "beatFx", t: ct, b, v: 0, i: idx, fx: "text", val: c.name });
+      ops.push({ k: "beatFx", t: ct, b, v: 0, i: idx, fx: "chord", val: c.name });
     }
-  }
+  });
   if (opts.markDoubtful) for (const b of a.doubtful.filter((x) => x >= 0 && x < nBars).slice(0, 40))
     ops.push({ k: "comment", c: { id: `tr-${b}`, b, text: "Revisar: notas dudosas en la transcripción.", by: "Transcriptor", at: Date.now() } });
   ops.push({ k: "analysis", a: summarize(a, "audio") });

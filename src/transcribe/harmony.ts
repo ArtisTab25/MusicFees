@@ -170,7 +170,7 @@ export function recognizeChords(chroma: number[][], bass: number[][], energy: nu
   // Inversiones: si el bajo dominante del segmento es otra nota del acorde, se nombra «C/E».
   for (const seg of segs) {
     delete (seg as { _s?: number })._s;
-    if (seg.root < 0 || seg.type === "5") continue; // un power chord no se nombra con inversión
+    if (seg.root < 0 || !["", "m", "7", "m7", "maj7"].includes(seg.type)) continue; // power chords y sus no se nombran con inversión
     const acc = new Array(12).fill(0);
     for (let k = seg.b0; k <= seg.b1; k++) for (let p = 0; p < 12; p++) acc[p] += bass[k][p];
     const tot = acc.reduce((a, b) => a + b, 0);

@@ -37,7 +37,7 @@ export type Op =
   | { k: "trackMove"; t: number; to: number }
   | { k: "trackProp"; t: number; prop: TrackProp; val: unknown }
   | { k: "songProp"; prop: SongProp; val: string | number }
-  | { k: "chordDef"; t: number; id: string; name: string; frets: number[] }
+  | { k: "chordDef"; t: number; id: string; name: string; frets: number[]; diagram?: boolean }
   | { k: "lyrics"; t: number; text: string }
   | { k: "voices"; t: number; n: number }
   | { k: "load"; json: string }
@@ -902,7 +902,7 @@ export function applyOp(score: Score, op: Op): Score {
       const played = op.frets.filter((f) => f > 0);
       c.firstFret = played.length ? Math.max(1, Math.min(...played)) : 1;
       if (Math.max(0, ...played) <= 4) c.firstFret = 1;
-      c.showDiagram = true;
+      c.showDiagram = op.diagram !== false && op.frets.length > 0;
       c.showName = true;
       st.addChord(op.id, c);
       break;

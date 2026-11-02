@@ -10,9 +10,13 @@ export interface RawNote {
   /** Fuerza o confianza 0–1 */ a: number;
 }
 
-export type Role = "melody" | "harmony" | "bass" | "drums" | "all";
+export type Role = "vocals" | "melody" | "guitar" | "keys" | "harmony" | "bass" | "drums" | "all";
 
-export interface Part { role: Role; notes: RawNote[] }
+/** `hint`: instrumento sugerido por el timbre (preset de MusicFees). */
+export interface Part { role: Role; notes: RawNote[]; hint?: string }
+
+/** Notas por fuente cuando la mezcla se separó antes de transcribir. */
+export interface StemNotes { vocals: RawNote[]; bass: RawNote[]; other: RawNote[]; otherTimbre: import("./timbre").NoteTimbre[] | null }
 
 export interface KeyInfo {
   tonic: number; // 0 = Do
@@ -74,6 +78,8 @@ export interface Analysis {
 export interface TranscribeOpts {
   /** "mix": canción completa → bajo, armonía, melodía y batería. "solo": un instrumento. */
   mode: "mix" | "solo";
+  /** Separar la mezcla en voz, batería, bajo y lo demás antes de transcribir (más fiel, más lento). */
+  separate?: boolean;
   /** Preset de MusicFees para cada parte (en "solo", el de "all"). */
   presets: Partial<Record<Role, string>>;
   drums: boolean;
