@@ -14,7 +14,7 @@ import { analyzeNotes } from "./analyze";
 import { transcribeSeparated } from "./pipeline";
 import { MDX_NFFT, separateStem, toMono22k, type Stem } from "./separate";
 import { DEMUCS_SEG, separateDemucs } from "./demucs";
-import type { Analysis, RawNote } from "./types";
+import type { Analysis, InstrumentHint, RawNote } from "./types";
 
 export interface WorkerIn {
   /** Mezcla estéreo a 44.1 kHz. */
@@ -25,6 +25,10 @@ export interface WorkerIn {
    * 6 fuentes y de MDX-Net solo se usa la batería; sin él, los tres modelos MDX-Net.
    */
   sep?: { ort: ArrayBuffer; drums: ArrayBuffer; vocals?: ArrayBuffer; bass?: ArrayBuffer; demucs?: { graph: ArrayBuffer; weights: ArrayBuffer } };
+  /** Qué instrumentos dijo el usuario que hay. */
+  hint?: InstrumentHint;
+  /** Pistas que el usuario ya separó (Moises, BandLab, UVR…): no se separa, se transcribe cada una. */
+  userStems?: Partial<Record<"vocals" | "drums" | "bass" | "guitar" | "piano" | "other", [Float32Array, Float32Array]>>;
 }
 export type WorkerOut =
   | { type: "progress"; pct: number; msg: string }
@@ -161,11 +165,23 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
 self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
-    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep } = e.data;
+    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems } = e.data;
     post({ type: "progress", pct: 1, msg: sep ? "Preparando los modelos de separación…" : "Preparando el modelo de notas…" });
     const be = await backend(wasmUrl, prefer);
     model ??= tf.loadGraphModel(modelUrl);
     const mix = toMono22k(L, R);
+    if (userStems) {
+      // Pistas ya separadas: cada una se transcribe con su papel; las que faltan quedan en silencio.
+      const z = new Float32Array(mix.length);
+      const m = (k: keyof typeof userStems) => (userStems[k] ? toMono22k(...userStems[k]!) : z);
+      const hasSix = !!(userStems.guitar || userStems.piano);
+      const mono = { vocals: m("vocals"), drums: m("drums"), bass: m("bass"), other: m("other"), guitar: hasSix ? m("guitar") : undefined, piano: hasSix ? m("piano") : undefined };
+      const h2: InstrumentHint = { ...hint, vocals: hint?.vocals ?? (userStems.vocals ? undefined : false), bass: hint?.bass ?? (userStems.bass ? undefined : false), drums: hint?.drums ?? (userStems.drums ? true : false) };
+      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2 }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
+        (pct, msg) => post({ type: "progress", pct, msg }));
+      post({ type: "done", analysis, backend: `${be}+pistas`, ms: performance.now() - t0 });
+      return;
+    }
     if (!sep || mode === "solo") {
       const notes = await notesOf(mix, sensitivity, "Escuchando las notas", 3, 72);
       post({ type: "progress", pct: 78, msg: "Midiendo el ritmo…" });
@@ -183,7 +199,7 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
       bass: toMono22k(...stems.bass), other: toMono22k(...stems.other),
       guitar: stems.guitar ? toMono22k(...stems.guitar) : undefined, piano: stems.piano ? toMono22k(...stems.piano) : undefined,
     };
-    const analysis = await transcribeSeparated(mix, mono, { mode, drums }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
+    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
       (pct, msg) => post({ type: "progress", pct, msg }));
     post({ type: "done", analysis, backend: `${be}+${ep}`, ms: performance.now() - t0 });
   } catch (err) {

@@ -442,3 +442,47 @@ test("cambios dentro de la pista: sonido y efectos desde un compás", async () =
   applyOp(back, { k: "fxAt", t: 0, b: 3, fx: null, del: true });
   assert.equal(M2.fxAtBar(back, 0, 5)?.preset, "clean");
 });
+
+test("cambiar de instrumento entre tipos y tablatura de texto", async () => {
+  const { planConvert } = await import("../src/score/convert");
+  const { textTab } = await import("../src/score/texttab");
+  const { beatToClip } = await import("../src/score/model");
+  let s = createSong("blank_gtr", 2, "Conversión");
+  // Piano (partitura) con un acorde de Do y una melodía aguda que en guitarra hay que bajar de octava.
+  applyOp(s, { k: "trackAdd", preset: "piano", name: "Piano" });
+  const t = s.tracks.length - 1;
+  const clip = (ps: number[], dur = 4) => ({ dur, dots: 0, tup: 0, notes: ps.map((p) => ({ pitch: p, fx: [] })) });
+  applyOp(s, { k: "setVoice", t, b: 0, v: 0, beats: [clip([48, 52, 55]), clip([60]), clip([100]), clip([64])] });
+  finishScore(s);
+  assert.equal(kindOf(s.tracks[t]), "notation");
+  const prog = s.tracks[t].playbackInfo.program;
+  const r = planConvert(s, t, "gtr_steel", true);
+  assert.equal(r.error, undefined);
+  for (const op of r.ops) applyOp(s, op);
+  finishScore(s);
+  const g = s.tracks[t];
+  assert.equal(kindOf(g), "tab");
+  assert.equal(g.name, "Piano");
+  assert.equal(g.playbackInfo.program, prog, "conserva el sonido de piano");
+  const beats = g.staves[0].bars[0].voices[0].beats.map((b) => beatToClip(g, b));
+  assert.deepEqual(beats[0].notes.map((n) => n.pitch).sort(), [48, 52, 55]);
+  assert.equal(beats[2].notes[0].pitch! % 12, 100 % 12, "la nota aguda se movió de octava");
+  assert.ok(r.moved >= 1);
+  // Y de vuelta a teclado, sonando a piano: alturas iguales.
+  const back = planConvert(s, t, "piano", false);
+  for (const op of back.ops) applyOp(s, op);
+  finishScore(s);
+  assert.equal(kindOf(s.tracks[t]), "notation");
+  assert.deepEqual(beatToClip(s.tracks[t], s.tracks[t].staves[0].bars[0].voices[0].beats[0]).notes.map((n) => n.pitch).sort(), [48, 52, 55]);
+  // Batería ↔ alturas no se permite; su tablatura de texto lleva los números GM.
+  applyOp(s, { k: "trackAdd", preset: "drums", name: "Batería" });
+  const d = s.tracks.length - 1;
+  applyOp(s, { k: "setVoice", t: d, b: 0, v: 0, beats: [{ dur: 4, dots: 0, tup: 0, notes: [{ drum: 36, fx: [] }, { drum: 42, fx: [] }] }, { dur: 4, dots: 0, tup: 0, notes: [{ drum: 38, fx: [] }] }, { dur: 2, dots: 0, tup: 0, notes: [] }] });
+  finishScore(s);
+  assert.ok(planConvert(s, d, "piano", false).error);
+  const txt = textTab(s.tracks[d]);
+  assert.match(txt, /36 Bombo\s+\|36-/);
+  assert.match(txt, /38 Caja\s+\|-{12}38/);
+  const pt = textTab(s.tracks[t]);
+  assert.match(pt, /Octava 3/);
+});

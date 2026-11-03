@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.4: dile qué instrumentos hay, usa pistas ya separadas y cambia cualquier pista de instrumento
+
+- **Qué instrumentos tiene la grabación** (Transcribir audio, opcional): voz, batería y bajo (sí/no), cuántas guitarras (0–3), teclados (0–2) y vientos, cuerdas o sinte con melodía (0–3). No se inventan partes que no existen y las notas se reparten entre las pistas indicadas: con 2 guitarras sale «Guitarra 1 (ritmo)» y «Guitarra 2 (punteo)»; con 3, el ritmo se divide en grave y agudo. Medido con las partituras de Brayand (indicación tomada de cada .gp): notas en la pista correcta 77 → 80 % y, en fragmentos no vistos, 68 → 75 %.
+- **¿Ya tienes las pistas separadas?** Sube las de Moises, BandLab Splitter, Ultimate Vocal Remover u otra app (voz, batería, bajo, guitarra, piano, lo demás; el tipo se adivina por el nombre del archivo y se puede corregir). MusicFees transcribe cada una con su papel, sin volver a separar: 20 s de 4 pistas en 12 s.
+- **Cambiar instrumento** (mantén presionada la pista): cualquier pista a cualquier instrumento, aunque sea de otro tipo — una guitarra a piano para oírla y leerla como teclado, o un piano o una voz a guitarra o bajo para verla en tablatura. Las notas se conservan; al pasar a cuerdas se elige la afinación que mejor acomoda la parte, lo que no cabe se mueve de octava y la digitación sale del algoritmo del transcriptor. Opción para conservar el sonido y solo cambiar cómo se escribe. En Sets → Pista, las pistas sin tablatura tienen «Ver en tablatura de guitarra» y «De bajo».
+- **Tablatura de texto**: la batería, con el número General MIDI de cada pieza en cada golpe (36 bombo, 38 caja, 42 hi-hat…); piano, voz y demás como tab de teclado (letras por octava). Se puede copiar o bajar como .txt.
+
 ## Versión 1.3.3: separación en 6 fuentes (guitarra y piano aparte)
 
 - **Modo «Fiel» con Demucs v4** (`htdemucs_6s`, Meta, MIT): voz, bajo, guitarra, piano y lo demás salen de Demucs; la batería, del modelo MDX-Net (lee mejor bombo, caja y hi-hat). Las notas de guitarra salen de la pista de guitarra y las de teclado de la de piano, en vez de adivinarse por timbre; de «lo demás» queda la línea principal (vientos, cuerdas, sinte).

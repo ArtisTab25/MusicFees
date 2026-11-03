@@ -5,7 +5,7 @@ import { analyzeNotes } from "./analyze";
 import { transcribeDrums } from "./drums";
 import { trackBass } from "./bassline";
 import { noteTimbres } from "./timbre";
-import type { Analysis, RawNote } from "./types";
+import type { Analysis, InstrumentHint, RawNote } from "./types";
 
 export const SR = 22050;
 /** Umbral de presencia (fuente/mezcla) por segundo para guitarra y piano separados. */
@@ -24,37 +24,47 @@ export function presence(src: Float32Array, mix: Float32Array): Float32Array {
   return out;
 }
 
-export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean },
+export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint },
   notesOf: NotesFn, progress: (pct: number, msg: string) => void = () => {}): Promise<Analysis> {
-  // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos).
+  const hint = opts.hint ?? {};
+  // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos). Si el
+  // usuario dice que hay voz, basta con menos; si dice que no, ni se escucha.
+  const vThr = hint.vocals ? 0.06 : 0.12;
   const vp = presence(mono.vocals, mix);
-  const sung = vp.filter((x) => x >= 0.12).length;
+  const sung = vp.filter((x) => x >= vThr).length;
   let vocals: RawNote[] = [];
-  const minSung = Math.min(8, Math.max(3, vp.length * 0.3));
-  if (sung >= minSung) {
+  const minSung = hint.vocals ? 1 : Math.min(8, Math.max(3, vp.length * 0.3));
+  if (hint.vocals !== false && sung >= minSung) {
     vocals = (await notesOf(mono.vocals, "Escuchando la voz", 60, 8))
-      .filter((n) => (vp[Math.floor(n.s)] ?? 0) >= 0.12 && n.p >= 40 && n.p <= 88);
+      .filter((n) => (vp[Math.floor(n.s)] ?? 0) >= vThr && n.p >= 40 && n.p <= 88);
   }
   progress(68, "Siguiendo la línea del bajo…");
   // YIN es más fiel que el modelo polifónico en los graves; si casi no encuentra nada, se usa el modelo.
-  let bassNotes = trackBass(mono.bass, SR);
-  if (bassNotes.length < 20) bassNotes = (await notesOf(mono.bass, "Escuchando el bajo", 70, 6)).filter((n) => n.p <= 67);
+  let bassNotes: RawNote[] = [];
+  if (hint.bass !== false) {
+    bassNotes = trackBass(mono.bass, SR);
+    if (bassNotes.length < 20) bassNotes = (await notesOf(mono.bass, "Escuchando el bajo", 70, 6)).filter((n) => n.p <= 67);
+  }
   let guitar: RawNote[] | undefined, keys: RawNote[] | undefined, guitarTimbre: ReturnType<typeof noteTimbres> | null = null;
   if (mono.guitar && mono.piano) {
     // Solo donde cada fuente pesa de verdad (si no, es lo que se coló de las demás).
-    const gate = async (src: Float32Array, label: string, from: number, thr: number) => {
+    // Si el usuario dice cuántos hay: con 0 no se escucha esa fuente; con 1 o más, basta con menos presencia.
+    const gate = async (src: Float32Array, label: string, from: number, thr: number, count: number | undefined) => {
+      if (count === 0) return [];
+      const t = thr;
       const pr = presence(src, mix);
-      if (pr.filter((x) => x >= thr).length < Math.min(6, pr.length * 0.15)) return [];
-      return (await notesOf(src, label, from, 6)).filter((n) => (pr[Math.floor(n.s)] ?? 0) >= thr);
+      if (!count && pr.filter((x) => x >= t).length < Math.min(6, pr.length * 0.15)) return [];
+      return (await notesOf(src, label, from, 6)).filter((n) => (pr[Math.floor(n.s)] ?? 0) >= t);
     };
-    guitar = await gate(mono.guitar, "Escuchando la guitarra", 72, GATE.guitar);
-    keys = await gate(mono.piano, "Escuchando el piano", 78, GATE.piano);
+    guitar = await gate(mono.guitar, "Escuchando la guitarra", 72, GATE.guitar, hint.guitars);
+    keys = await gate(mono.piano, "Escuchando el piano", 78, GATE.piano, hint.keys);
     guitarTimbre = noteTimbres(mono.guitar, SR, guitar);
   }
   const otherNotes = await notesOf(mono.other, mono.guitar ? "Escuchando lo demás" : "Escuchando guitarras y teclados", 84, mono.guitar ? 4 : 12);
   progress(89, "Leyendo la batería: bombo, caja, toms y platillos…");
   const dp = presence(mono.drums, mix);
-  const drumHits = opts.drums && dp.filter((x) => x >= 0.15).length >= 8 ? transcribeDrums(mono.drums, SR) : [];
+  const wantDrums = hint.drums ?? opts.drums;
+  const drumHits = wantDrums && (hint.drums || dp.filter((x) => x >= 0.15).length >= 8) ? transcribeDrums(mono.drums, SR) : [];
   progress(92, "Reconociendo instrumentos por su timbre…");
   const otherTimbre = noteTimbres(mono.other, SR, otherNotes);
   progress(95, "Midiendo el ritmo y la armonía…");
@@ -62,9 +72,9 @@ export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, op
   const half = halveByBackbeat(r.beats, drumHits);
   if (half) { r.beats = half; r.tempo /= 2; }
   const analysis = analyzeNotes({ notes: [], drums: drumHits, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode: opts.mode, audio: r.features,
-    stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre, guitar, keys, guitarTimbre } });
+    stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre, guitar, keys, guitarTimbre, hint } });
   if (r.tempoConf < 0.35) analysis.notesForUser.push("El pulso no es muy marcado: revisa el tempo y dónde empieza el compás.");
-  if (!vocals.length && sung < minSung) analysis.notesForUser.push("No encontré voz cantada: la melodía principal sale de los instrumentos.");
+  if (!vocals.length && hint.vocals !== false && sung < minSung) analysis.notesForUser.push("No encontré voz cantada: la melodía principal sale de los instrumentos.");
   return analysis;
 }
 

@@ -13,7 +13,7 @@ import { canUseDemucs, DEMUCS_PACKS, DEMUCS_WEIGHT_BYTES, SEP6_MB, SEP_MB, SEP_P
 import type { Pack } from "../player/downloads";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
 import { analyzeScore } from "./symbolic";
-import type { Analysis, Role, TranscribeOpts } from "./types";
+import type { Analysis, InstrumentHint, Role, TranscribeOpts } from "./types";
 import type { WorkerIn, WorkerOut } from "./worker";
 
 const SR = 44100;
@@ -92,8 +92,22 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("button", { "aria-pressed": false, onclick: () => setMode("solo") }, "Un instrumento"));
   const soloSel = presetSelect("gtr_steel", ["tab", "notation"]);
   const soloField = h("div", { class: "field", hidden: true }, h("label", null, "Instrumento"), soloSel);
-  const drums = h("input", { type: "checkbox", checked: true, id: "tr-drums" });
-  const drumsRow = h("label", { class: "inline", for: "tr-drums" }, drums, "Detectar la batería (bombo, caja, toms, hi-hat, crash y ride)");
+  // Qué instrumentos hay (opcional): con esto no se inventan partes y las notas se reparten entre el
+  // número de guitarras o teclados indicado. «Automático» deja que MusicFees lo decida.
+  const yesNo = (label: string) => h("select", { "aria-label": label }, h("option", { value: "" }, "Automático"), h("option", { value: "1" }, "Sí"), h("option", { value: "0" }, "No"));
+  const count = (label: string, max: number) => h("select", { "aria-label": label }, h("option", { value: "" }, "Automático"), ...Array.from({ length: max + 1 }, (_, i) => h("option", { value: String(i) }, String(i))));
+  const inst = { vocals: yesNo("Voz"), drums: yesNo("Batería"), bass: yesNo("Bajo"), guitars: count("Guitarras", 3), keys: count("Teclados o piano", 2), leads: count("Vientos, cuerdas o sinte con melodía", 3) };
+  const instField = (label: string, el: HTMLElement) => h("div", { class: "field" }, h("label", null, label), el);
+  const drumsRow = h("div", null,
+    h("p", { class: "note" }, "Opcional: dile qué instrumentos tiene. Así no inventa partes y reparte las notas entre las guitarras o teclados que indiques (la 2.ª guitarra sale como punteo). Se aprovecha sobre todo en calidad «Fiel»."),
+    instField("Voz", inst.vocals), instField("Batería", inst.drums), instField("Bajo", inst.bass),
+    instField("Guitarras", inst.guitars), instField("Teclados o piano", inst.keys), instField("Vientos, cuerdas o sinte con melodía", inst.leads));
+  const readHint = (): InstrumentHint => {
+    const b = (x: HTMLSelectElement) => (x.value === "" ? undefined : x.value === "1");
+    const n = (x: HTMLSelectElement) => (x.value === "" ? undefined : Number(x.value));
+    return { vocals: b(inst.vocals as HTMLSelectElement), drums: b(inst.drums as HTMLSelectElement), bass: b(inst.bass as HTMLSelectElement), guitars: n(inst.guitars as HTMLSelectElement), keys: n(inst.keys as HTMLSelectElement), leads: n(inst.leads as HTMLSelectElement) };
+  };
+  const drums = { get checked() { return (inst.drums as HTMLSelectElement).value !== "0"; } };
   function setMode(m: "mix" | "solo") {
     mode = m;
     [...modeBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String((i === 0) === (m === "mix"))));
@@ -165,20 +179,78 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
         }
       } catch (e) { busy(false); status.textContent = `${(e as Error).message} Puedes usar la calidad «Rápida» mientras tanto.`; return; }
     }
+    const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
+    const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
+    const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, hint: mode === "mix" ? readHint() : undefined };
+    launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])], opts);
+  }
+  const modelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
+  function launch(msg: WorkerIn, transfer: Transferable[], opts: TranscribeOpts) {
     worker?.terminate();
     worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-    const modelUrl = new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
     worker.onmessage = (e: MessageEvent<WorkerOut>) => {
       const m = e.data;
       if (m.type === "progress") { bar.value = m.pct; status.textContent = m.msg; }
       else if (m.type === "error") { busy(false); worker?.terminate(); worker = null; status.textContent = `No se pudo transcribir: ${m.message}`; }
-      else { busy(false); worker?.terminate(); worker = null; const mins = m.ms / 60000; result(sheets, c, m.analysis, opts, `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
+      else { busy(false); worker?.terminate(); worker = null; const mins = m.ms / 60000; result(sheets, c, m.analysis, opts, `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("pistas") ? "pistas separadas por ti" : m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
     };
     worker.onerror = (e) => { busy(false); status.textContent = `No se pudo transcribir: ${e.message || "error del proceso"}`; };
-    const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
-    const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
-    const msg: WorkerIn = { L, R, modelUrl, wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep };
-    worker.postMessage(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])]);
+    worker.postMessage(msg, transfer);
+  }
+  // Pistas ya separadas en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…): no se separa
+  // nada, cada archivo se transcribe con su papel.
+  type StemKind = "vocals" | "drums" | "bass" | "guitar" | "piano" | "other";
+  const STEM_NAMES: [StemKind, string][] = [["vocals", "Voz"], ["drums", "Batería"], ["bass", "Bajo"], ["guitar", "Guitarra"], ["piano", "Piano o teclado"], ["other", "Lo demás"]];
+  const guessKind = (n: string): StemKind => {
+    const x = n.toLowerCase();
+    if (/vocal|voice|voz|vox|sing/.test(x)) return "vocals";
+    if (/drum|bater|perc/.test(x)) return "drums";
+    if (/bass|bajo/.test(x)) return "bass";
+    if (/guit|gtr/.test(x)) return "guitar";
+    if (/piano|key|tecla|synth|sinte|organ/.test(x)) return "piano";
+    return "other";
+  };
+  const stemRows: { f: File; sel: HTMLSelectElement; el: HTMLElement }[] = [];
+  const stemList = h("div");
+  const stemGo = h("button", { class: "primary", disabled: true, onclick: () => void runStems() }, "Transcribir pistas");
+  const stemIn = h("input", { type: "file", multiple: true, accept: "audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac", "aria-label": "Pistas separadas", onchange: () => {
+    for (const f of [...(stemIn.files ?? [])]) {
+      const sel = h("select", { "aria-label": `Qué es ${f.name}` }, STEM_NAMES.map(([k, n]) => h("option", { value: k, selected: k === guessKind(f.name) }, n))) as HTMLSelectElement;
+      const row = { f, sel, el: h("div", { class: "partrow" }, h("span", null, f.name), sel) };
+      stemRows.push(row); stemList.append(row.el);
+    }
+    stemIn.value = "";
+    stemGo.disabled = !stemRows.length;
+  } });
+  async function runStems() {
+    if (!stemRows.length) return;
+    busy(true); stemGo.disabled = true;
+    try {
+      status.textContent = "Leyendo las pistas…";
+      const got: Partial<Record<StemKind, [Float32Array, Float32Array]>> = {};
+      let n = 0;
+      for (const r of stemRows) {
+        const [l, rr] = await decode(await r.f.arrayBuffer());
+        const k = r.sel.value as StemKind;
+        const cur = got[k];
+        if (cur) { const m = Math.min(cur[0].length, l.length); for (let i = 0; i < m; i++) { cur[0][i] += l[i]; cur[1][i] += rr[i]; } }
+        else got[k] = [l, rr];
+        n = Math.max(n, l.length);
+      }
+      n = Math.min(n, MAX_SECONDS * SR);
+      // Todas del mismo largo; la mezcla es la suma.
+      const L = new Float32Array(n), R = new Float32Array(n);
+      for (const k of Object.keys(got) as StemKind[]) {
+        const [a, b] = got[k]!, A = new Float32Array(n), B = new Float32Array(n);
+        A.set(a.subarray(0, n)); B.set(b.subarray(0, n)); got[k] = [A, B];
+        for (let i = 0; i < n; i++) { L[i] += A[i]; R[i] += B[i]; }
+      }
+      const t = title.value.trim() && title.value !== "Transcripción" ? title.value.trim() : stemRows[0].f.name.replace(/[-_ ]*(vocals?|drums?|bass|guitar|piano|other|voz|bajo|bateria|batería)\.[^.]+$|\.[^.]+$/i, "") || "Pistas";
+      const opts: TranscribeOpts = { mode: "mix", separate: false, presets: {}, drums: !!got.drums, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: t };
+      const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
+      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, hint: readHint(), userStems: got };
+      launch(msg, [L.buffer, R.buffer, ...Object.values(got).flatMap((x) => [x![0].buffer, x![1].buffer])], opts);
+    } catch (e) { busy(false); stemGo.disabled = false; status.textContent = `No pude leer las pistas: ${(e as Error).message}`; }
   }
   // MIDI hecho en otro lado (NeuralNote/MuScriptor en tu computadora, un teclado, otra app): MusicFees
   // lo convierte en pistas con tablatura, acordes y análisis.
@@ -207,6 +279,9 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       h("label", { class: "inline", for: "tr-mark" }, mark, "Marcar con 💬 los compases dudosos para revisarlos")),
     h("div", { class: "inline" }, go, cancel), bar,
     h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en equipos con poca memoria, MDX-Net separa voz, batería y bajo); un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
+    h("div", { class: "sec" }, h("h3", null, "¿Ya tienes las pistas separadas?"),
+      h("p", { class: "note" }, "Si separaste la canción en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…), sube aquí sus pistas: voz, batería, bajo, guitarra, piano, lo demás. MusicFees transcribe cada una con su instrumento, sin volver a separar. Usa la indicación de instrumentos de arriba para decir cuántas guitarras o teclados hay."),
+      stemIn, stemList, stemGo),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes un MIDI?"),
       h("p", { class: "note" }, "Si transcribiste en tu computadora con NeuralNote (gratis, usa el modelo MuScriptor) u otra herramienta, importa aquí el MIDI: MusicFees lo convierte en pistas con tablatura, acordes, secciones y análisis."),
       midiIn),

@@ -12,6 +12,8 @@ import { addVersion, deleteTrash, deleteVersion, libMeta, parseTags, setLibMeta,
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { GM_NAMES, PRESETS, STYLES, TUNINGS, gmName, presetById } from "../score/instruments";
+import { planConvert } from "../score/convert";
+import { textTab } from "../score/texttab";
 import { STRUMS } from "../score/strum";
 import { ordered } from "../score/clip";
 import { mergeTargets, planMerge, planSplitPitch, planSplitVoices, subScore, usedVoices } from "../score/tracks";
@@ -239,6 +241,29 @@ export class Sheets {
           }) : null,
           act("Exportar solo esta pista", "Audio, Guitar Pro, MIDI o PDF", () => { ed.selectTrack(i); this.exportDialog({ scope: "track" }); }))));
     }
+    // Cambiar a cualquier instrumento, aunque sea de otro tipo (guitarra ↔ teclado ↔ voz…), y ver en
+    // tablatura de texto lo que no tiene tablatura (batería con sus números, piano y voz con letras).
+    {
+      const groups = new Map<string, typeof PRESETS>();
+      for (const p of PRESETS) if ((p.kind === "drums") === (kind === "drums")) (groups.get(p.group) ?? groups.set(p.group, []).get(p.group)!).push(p);
+      const target = h("select", { "aria-label": "Instrumento nuevo" }, [...groups].map(([g, ps]) => h("optgroup", { label: g }, ps.map((p) => h("option", { value: p.id }, `${p.name}${p.kind === "tab" ? " · tablatura" : p.kind === "notation" ? " · partitura" : ""}`)))));
+      const keep = h("input", { type: "checkbox", id: "conv-keep" });
+      const convert = () => {
+        const r = planConvert(ed.score, i, target.value, keep.checked);
+        if (r.error) { this.c.toast(r.error, true); return; }
+        this.ops(r.ops); ed.selectTrack(i);
+        const p = presetById(target.value)!;
+        this.c.toast(`«${tr.name}» ahora es ${p.name}${r.tuningName ? `, en afinación ${r.tuningName}` : ""}.${r.moved ? ` ${r.moved} notas fuera del rango se movieron de octava.` : ""}${r.dropped ? ` ${r.dropped} notas de acordes imposibles se quitaron.` : ""} Deshacer lo regresa.`);
+        this.close();
+      };
+      sections.push(h("div", { class: "sec" }, h("h3", null, "Cambiar instrumento"),
+        kind === "drums" ? h("p", { class: "note" }, "La batería puede cambiar de kit; para verla en números usa la tablatura de texto.") : h("p", { class: "note" }, "Cualquier instrumento, aunque sea de otro tipo: una guitarra a piano para oírla y leerla como teclado, o un piano o una voz a guitarra para verlos en tablatura. Las notas se conservan; si pasa a cuerdas se elige la afinación que mejor acomoda la parte y la digitación más cómoda."),
+        kind === "drums" ? null : target,
+        kind === "drums" ? null : h("label", { class: "inline", for: "conv-keep" }, keep, "Conservar el sonido actual (solo cambiar cómo se escribe)"),
+        h("div", { class: "inline" },
+          kind === "drums" ? null : h("button", { class: "primary", onclick: convert }, "Cambiar instrumento"),
+          kind !== "tab" ? h("button", { class: "ghost", onclick: () => this.textTabSheet(i) }, kind === "drums" ? "Tablatura de texto (números)" : "Tablatura de texto (teclado)") : null)));
+    }
     if (kind !== "drums") sections.push(h("div", { class: "sec" }, h("h3", null, "Transponer toda la pista"), h("div", { class: "inline" },
       ...([[-12, "−8va"], [-2, "−1 tono"], [-1, "−½"], [1, "+½"], [2, "+1 tono"], [12, "+8va"]] as [number, string][]).map(([n, l]) => h("button", { class: "ghost", onclick: () => this.c.toast(ed.transposeTrack(i, n)) }, l)))));
     if (kind === "tab") {
@@ -251,6 +276,20 @@ export class Sheets {
         h("div", { class: "inline" }, h("span", null, "Capo"), capo, h("button", { class: "ghost", onclick: () => { this.ops([{ k: "trackProp", t: i, prop: "capo", val: Number(capo.value) }]); this.c.toast(`Capo en ${capo.value}.`); } }, "Aplicar"))));
     }
     this.open(`${i + 1}. ${tr.name}`, "full", ...sections);
+  }
+
+  /** Tablatura de texto de una pista sin tablatura: batería con números GM, piano y voz con letras. */
+  textTabSheet(i: number) {
+    const tr = this.c.ed.score.tracks[i];
+    if (!tr) return;
+    const txt = textTab(tr);
+    const pre = h("pre", { class: "texttab", style: "overflow:auto;max-height:65vh;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre;background:var(--surface-2,#111);padding:10px;border-radius:8px" }, txt);
+    this.open(`Tablatura de texto · ${tr.name}`, "full",
+      pre,
+      h("div", { class: "inline" },
+        h("button", { class: "primary", onclick: async () => { try { await navigator.clipboard.writeText(txt); this.c.toast("Copiada."); } catch { this.c.toast("No pude copiar: selecciona el texto.", true); } } }, "Copiar"),
+        h("button", { class: "ghost", onclick: () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/plain" })); a.download = `${(this.c.ed.score.title || "cancion").replace(/[\\/:*?"<>|]+/g, "_")} - ${tr.name}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); } }, "Descargar .txt"),
+        h("button", { class: "ghost", onclick: () => this.trackMenu(i) }, "Volver")));
   }
 
   // ---------- Sets: canción y pista ----------
@@ -312,6 +351,24 @@ export class Sheets {
           h("button", { class: "ghost", "aria-pressed": st.showTablature, style: st.showTablature ? "background:#4a8cf0" : "", onclick: () => { this.ops([{ k: "trackProp", t: i, prop: "showTab", val: !st.showTablature }]); this.sets("track"); } }, "Tablatura"),
           h("button", { class: "ghost", "aria-pressed": st.showStandardNotation, style: st.showStandardNotation ? "background:#4a8cf0" : "", onclick: () => { this.ops([{ k: "trackProp", t: i, prop: "showNotation", val: !st.showStandardNotation }]); this.sets("track"); } }, "Partitura"))),
         field("Afinación", tunSel), field("Cuerdas", strings), field("Capo", capo)));
+    }
+    if (kind !== "tab") {
+      // Piano, voz, vientos o batería: también se pueden ver en tablatura.
+      const asGuitar = (id: string) => {
+        const r = planConvert(ed.score, i, id, true);
+        if (r.error) { this.c.toast(r.error, true); return; }
+        this.ops(r.ops); ed.selectTrack(i);
+        this.c.toast(`«${tr.name}» en tablatura de ${presetById(id)!.name.toLowerCase()}${r.tuningName ? ` (${r.tuningName})` : ""}, con el mismo sonido.${r.moved ? ` ${r.moved} notas se movieron de octava para caber.` : ""} Deshacer lo regresa.`);
+        this.sets("track");
+      };
+      body.append(h("div", { class: "sec" }, h("h3", null, "Tablatura"),
+        kind === "drums"
+          ? h("p", { class: "note" }, "La batería se ve en el pentagrama de percusión; en texto, cada golpe lleva el número de su pieza (36 bombo, 38 caja, 42 hi-hat…).")
+          : h("p", { class: "note" }, "Para tocar esta parte en guitarra o bajo: pasa a tablatura con la digitación más cómoda y sigue sonando igual. O mírala como tab de teclado (letras por octava)."),
+        h("div", { class: "inline" },
+          kind === "drums" ? null : h("button", { class: "primary", onclick: () => asGuitar("gtr_steel") }, "Ver en tablatura de guitarra"),
+          kind === "drums" ? null : h("button", { class: "ghost", onclick: () => asGuitar("bass_finger") }, "De bajo"),
+          h("button", { class: "ghost", onclick: () => this.textTabSheet(i) }, kind === "drums" ? "Tablatura de texto (números)" : "Tab de teclado (texto)"))));
     }
     const vol = h("input", { type: "range", min: 0, max: 16, value: tr.playbackInfo.volume, "aria-label": "Volumen" });
     vol.onchange = () => this.ops([{ k: "trackProp", t: i, prop: "volume", val: Number(vol.value) }]);
@@ -854,7 +911,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.3.3 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.3.4 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 

@@ -107,24 +107,33 @@ export function analyzeNotes(input: {
   if (stems) {
     if (vocals.length >= 4) parts.push({ role: "vocals", notes: vocals, hint: "voice" });
     const L = splitOther(other, stems.otherTimbre && stems.otherTimbre.length === stems.other.length ? alignTimbre(stems.other, other, stems.otherTimbre) : null, sp);
+    let lead = L.lead, leadHint = L.hints.lead, G: RawNote[], K: RawNote[], gHint = L.hints.guitar;
     if (gtr6 || keys6) {
       // 6 fuentes: guitarra y piano salen de su propia pista; de «lo demás» queda la línea principal
-      // (vientos, cuerdas, sinte) y su acompañamiento se suma a la capa que le toca por timbre.
-      const G = [...(gtr6 ?? []), ...(SIX_OPTS.leftover ? L.guitar : [])], K = [...(keys6 ?? []), ...(SIX_OPTS.leftover ? L.keys : [])];
+      // (vientos, cuerdas, sinte).
+      G = [...(gtr6 ?? []), ...(SIX_OPTS.leftover ? L.guitar : [])]; K = [...(keys6 ?? []), ...(SIX_OPTS.leftover ? L.keys : [])];
       const gt = stems.guitarTimbre && stems.guitar && stems.guitarTimbre.length === stems.guitar.length ? alignTimbre(stems.guitar, gtr6 ?? [], stems.guitarTimbre) : [];
       const bright = gt.length ? gt.reduce((x, t) => x + t.bright, 0) / gt.length : 0.4;
+      gHint = bright > 0.9 ? "gtr_dist" : bright > 0.55 ? "gtr_od" : "gtr_clean";
       // Con la guitarra ya aparte, la línea principal de «lo demás» suele ser viento, cuerda o sinte (medido).
-      if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead === "gtr_clean" ? "lead_saw" : L.hints.lead });
-      if (G.length) parts.push({ role: "guitar", notes: cleanHarmony(G, chords, beats, !!bassLine.length), hint: bright > 0.9 ? "gtr_dist" : bright > 0.55 ? "gtr_od" : "gtr_clean" });
-      if (K.length) parts.push({ role: "keys", notes: cleanHarmony(K, chords, beats, !!bassLine.length), hint: L.hints.keys });
-    } else {
-    if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead });
-    if (L.guitar.length) parts.push({ role: "guitar", notes: cleanHarmony(L.guitar, chords, beats, !!bassLine.length), hint: L.hints.guitar });
-    if (L.keys.length) parts.push({ role: "keys", notes: cleanHarmony(L.keys, chords, beats, !!bassLine.length), hint: L.hints.keys });
+      if (leadHint === "gtr_clean") leadHint = "lead_saw";
+    } else { G = L.guitar; K = L.keys; }
+    // Lo que indicó el usuario manda sobre lo que se adivinó.
+    const H = stems.hint ?? {};
+    if (H.guitars === 0 && H.keys !== 0) { K = [...K, ...G]; G = []; }
+    if (H.keys === 0 && H.guitars !== 0) { G = [...G, ...K]; K = []; }
+    if (H.leads === 0 && lead.length) { if (H.guitars !== 0) G = [...G, ...lead]; else K = [...K, ...lead]; lead = []; }
+    if (lead.length) parts.push({ role: "melody", notes: lead, hint: leadHint, name: H.leads ? "Melodía (vientos/cuerdas/sinte)" : undefined });
+    const nG = H.guitars ?? 1, nK = H.keys ?? 1;
+    for (const [i, x] of splitLayer(cleanHarmony(G, chords, beats, !!bassLine.length), nG, sp).entries()) {
+      const solo = nG > 1 && i === 1;
+      parts.push({ role: "guitar", notes: x, hint: solo && gHint === "gtr_clean" ? "gtr_od" : gHint, name: nG > 1 ? `Guitarra ${i + 1}${solo ? " (punteo)" : i === 0 ? " (ritmo)" : ""}` : undefined });
     }
+    for (const [i, x] of splitLayer(cleanHarmony(K, chords, beats, !!bassLine.length), nK, sp).entries())
+      parts.push({ role: "keys", notes: x, hint: L.hints.keys, name: nK > 1 ? `Teclado ${i + 1}${i === 1 ? " (melodía)" : i === 0 ? " (acordes)" : ""}` : undefined });
     if (bassLine.length) parts.push({ role: "bass", notes: bassLine });
     const toV = (ns: RawNote[]): VNote[] => ns.map((n) => ({ q0: Math.round(q(n.s) * 4) / 4, q1: Math.round(q(n.e) * 4) / 4, p: n.p })).filter((n) => n.q1 > n.q0);
-    const top = vocals.length >= 4 ? vocals : L.lead;
+    const top = vocals.length >= 4 ? vocals : lead;
     if (top.length && bassLine.length) counterpoint = analyzeCounterpoint(toV(top), toV(bassLine), meter, [vocals.length >= 4 ? "Voz" : "Melodía", "Bajo"]);
   } else if (mode === "mix") {
     const r = splitRoles(pitched);
@@ -169,6 +178,27 @@ function cleanHarmony(notes: RawNote[], chords: import("./types").ChordSeg[], be
     const inChord = (CT[c.type] ?? [0, 4, 7]).some((iv) => (c.root + iv) % 12 === ((n.p % 12) + 12) % 12);
     return inChord || n.a >= 0.55 || n.e - n.s >= spb;
   });
+}
+
+/**
+ * Reparte una capa (guitarras o teclados) entre `n` pistas, como suelen escribirse: la 1 los acordes o
+ * el ritmo, la 2 la línea de una nota que sobresale arriba (punteo, melodía) y, si hay más, el ritmo se
+ * divide por registro (grave / agudo). Con n = 1 o pocas notas, todo queda en una.
+ */
+export function splitLayer(notes: RawNote[], n: number, beat: number): RawNote[][] {
+  if (!notes.length) return [];
+  if (n <= 1 || notes.length < 24) return [notes];
+  const L = splitOther(notes, null, beat);
+  // La línea puede corregir octavas (objetos nuevos): se compara por inicio y fin.
+  const k = (x: RawNote) => `${x.s.toFixed(4)}|${x.e.toFixed(4)}`;
+  const leadSet = new Set(L.lead.map(k));
+  const rest = notes.filter((x) => !leadSet.has(k(x)));
+  const out: RawNote[][] = [];
+  if (n >= 3 && rest.length >= 24) {
+    const ps = rest.map((x) => x.p).sort((a, b) => a - b), mid = ps[ps.length >> 1];
+    out.push(rest.filter((x) => x.p < mid), L.lead, rest.filter((x) => x.p >= mid));
+  } else out.push(rest, L.lead);
+  return out.filter((x) => x.length);
 }
 
 /** `removeOvertones` puede quitar notas: se conserva el timbre de las que quedan. */

@@ -20,7 +20,15 @@ export interface StemNotes {
   vocals: RawNote[]; bass: RawNote[]; other: RawNote[]; otherTimbre: import("./timbre").NoteTimbre[] | null;
   /** Separación de 6 fuentes (Demucs): guitarra y piano ya vienen aparte. */
   guitar?: RawNote[]; keys?: RawNote[]; guitarTimbre?: import("./timbre").NoteTimbre[] | null;
+  /** Lo que indicó el usuario. */
+  hint?: InstrumentHint;
 }
+
+/**
+ * Lo que el usuario dice que hay en la grabación (undefined = que lo decida MusicFees). Con esto no se
+ * inventan partes que no existen y se reparten las notas entre el número de guitarras o teclados indicado.
+ */
+export interface InstrumentHint { vocals?: boolean; drums?: boolean; bass?: boolean; guitars?: number; keys?: number; leads?: number }
 
 export interface KeyInfo {
   tonic: number; // 0 = Do

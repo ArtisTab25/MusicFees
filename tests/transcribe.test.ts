@@ -298,3 +298,24 @@ test("Demucs: STFT, ISTFT y trozos con solape reconstruyen la mezcla (red identi
   for (let i = 4096; i < n - 4096; i++) { num += L[i] * L[i] + R[i] * R[i]; den += (L[i] - yl[i]) ** 2 + (R[i] - yr[i]) ** 2; }
   assert.ok(10 * Math.log10(num / den) > 60, `SDR ${10 * Math.log10(num / den)}`);
 });
+
+test("indicación de instrumentos: sin teclado todo va a guitarra; dos guitarras = ritmo y punteo", async () => {
+  const { analyzeNotes } = await import("../src/transcribe/analyze");
+  const beats = Array.from({ length: 64 }, (_, i) => i * 0.5);
+  const chords: { s: number; e: number; p: number; a: number }[] = [], solo: typeof chords = [], keys: typeof chords = [];
+  for (let k = 0; k < 32; k++) {
+    const t = k;
+    for (const p of [48, 52, 55]) chords.push({ s: t * 0.5, e: t * 0.5 + 0.45, p: p + (k % 4 === 2 ? 5 : 0), a: 0.6 });
+    solo.push({ s: t * 0.5 + 0.25, e: t * 0.5 + 0.45, p: 72 + [0, 2, 4, 7, 9, 7, 4, 2][k % 8], a: 0.8 });
+    keys.push({ s: t * 0.5, e: t * 0.5 + 0.4, p: 64 + (k % 3), a: 0.5 });
+  }
+  const base = { notes: [], beats, duration: 32, tempo: 120, mode: "mix" as const };
+  const stems = { vocals: [], bass: [], other: [], otherTimbre: null, guitar: [...chords, ...solo], keys };
+  const a1 = analyzeNotes({ ...base, stems: { ...stems, hint: { keys: 0 } } });
+  assert.ok(!a1.parts.some((p) => p.role === "keys"), "sin teclado");
+  const a2 = analyzeNotes({ ...base, stems: { ...stems, hint: { guitars: 2, keys: 1 } } });
+  const g = a2.parts.filter((p) => p.role === "guitar");
+  assert.equal(g.length, 2);
+  assert.match(g[1].name ?? "", /punteo/);
+  assert.ok(g[1].notes.every((n) => n.p >= 72), "el punteo es la línea aguda");
+});
