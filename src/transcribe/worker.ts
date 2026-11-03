@@ -11,7 +11,8 @@ import { BasicPitch, noteFramesToTime, outputToNotesPoly } from "@spotify/basic-
 import * as ort from "onnxruntime-web/webgpu";
 import { audioRhythm } from "./features";
 import { analyzeNotes } from "./analyze";
-import { transcribeSeparated } from "./pipeline";
+import { neuralBeats, transcribeSeparated, type NeuralRhythm } from "./pipeline";
+import { beatThis } from "./beatthis";
 import { MDX_NFFT, separateStem, toMono22k, type Stem } from "./separate";
 import { DEMUCS_SEG, separateDemucs } from "./demucs";
 import { threadsFor } from "./packs";
@@ -26,6 +27,8 @@ export interface WorkerIn {
    * 6 fuentes y de MDX-Net solo se usa la batería; sin él, los tres modelos MDX-Net.
    */
   sep?: { ort: ArrayBuffer; drums?: ArrayBuffer; vocals?: ArrayBuffer; bass?: ArrayBuffer; demucs?: { graph: ArrayBuffer; weights: ArrayBuffer | null; seg: number }; fast?: boolean };
+  /** Beat This! (pulso y compás con red neuronal): red, pesos en float16 y, si no vino con `sep`, el motor ONNX. */
+  beat?: { graph: ArrayBuffer; weights: ArrayBuffer | null; ort?: ArrayBuffer };
   /** Qué instrumentos dijo el usuario que hay. */
   hint?: InstrumentHint;
   /** Pistas que el usuario ya separó (Moises, BandLab, UVR…): no se separa, se transcribe cada una. */
@@ -38,6 +41,12 @@ export type WorkerOut =
 
 const post = (m: WorkerOut) => (self as unknown as Worker).postMessage(m);
 const SR = 22050;
+/**
+ * Sobre fuentes separadas, el modelo de notas oye también los restos de la separación y escribe notas de
+ * más (por eso «Rápida» a veces sonaba más limpia). Medido con las partituras de Brayand: con 0,7 × la
+ * sensibilidad elegida, notas acertadas +1,7/+2,2 puntos y reparto +0,6/+0,7 en ambos grupos de fragmentos.
+ */
+const SEP_SENS = 0.7;
 
 let model: Promise<tf.GraphModel> | null = null;
 /** Aceleración: WebAssembly (SIMD; el más estable en teléfonos), si no WebGL y, al final, JavaScript puro. */
@@ -109,15 +118,41 @@ async function session(bytes: ArrayBuffer, gpu: boolean, extra: ort.InferenceSes
   return { s: await ort.InferenceSession.create(new Uint8Array(bytes), { ...extra, executionProviders: ["wasm"] }), ep: "wasm" };
 }
 
+function ortSetup(wasm: ArrayBuffer) {
+  ort.env.wasm.wasmBinary = wasm;
+  // Con aislamiento entre orígenes (service worker), varios núcleos; si no, uno.
+  ort.env.wasm.numThreads = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated ? threadsFor(navigator.hardwareConcurrency) : 1;
+}
+
+/** Pulsos y tiempos fuertes con Beat This!. Si algo falla, se sigue con el detector propio (null). */
+async function neuralRhythm(mix: Float32Array, beat: NonNullable<WorkerIn["beat"]>, wasm: ArrayBuffer | undefined, pct: number): Promise<NeuralRhythm | null> {
+  if (!wasm || !beat.weights) return null;
+  try {
+    ortSetup(wasm);
+    post({ type: "progress", pct, msg: "Buscando el pulso y el compás (Beat This!)…" });
+    let w: Float32Array | null = f16to32(beat.weights);
+    beat.weights = null;
+    const { s } = await session(beat.graph, false, { externalData: [{ path: "beat_this.data", data: new Uint8Array(w.buffer) }] });
+    w = null;
+    const r = await beatThis(mix, async (spec, frames) => {
+      const o = await s.run({ spect: new ort.Tensor("float32", spec, [1, frames, 128]) });
+      return { beat: o.beat.data as Float32Array, downbeat: o.downbeat.data as Float32Array };
+    }, (c, total) => post({ type: "progress", pct, msg: `Buscando el pulso y el compás (${c} de ${total})…` }));
+    await s.release();
+    return r;
+  } catch (err) {
+    console.warn("Beat This! no funcionó; se usa el detector propio:", err);
+    return null;
+  }
+}
+
 /**
  * Separa la mezcla. Con Demucs: voz, bajo, guitarra, piano y lo demás salen de Demucs y la batería de
  * MDX-Net (medido con las partituras de Brayand: así gana en bajo y en reparto sin perder batería).
  * Sin Demucs: voz, batería y bajo de MDX-Net; «lo demás» es lo que sobra.
  */
 async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<WorkerIn["sep"]>): Promise<{ stems: Separated; ep: string }> {
-  ort.env.wasm.wasmBinary = sep.ort;
-  // Con aislamiento entre orígenes (service worker), varios núcleos; si no, uno.
-  ort.env.wasm.numThreads = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated ? threadsFor(navigator.hardwareConcurrency) : 1;
+  ortSetup(sep.ort);
   const gpu = await realGpu();
   const t0 = performance.now();
   const names: Record<string, string> = { vocals: "la voz", drums: "la batería", bass: "el bajo", demucs: "guitarra, piano, bajo y voz" };
@@ -177,7 +212,7 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
 if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
-    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems } = e.data;
+    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems, beat } = e.data;
     post({ type: "progress", pct: 1, msg: sep ? "Preparando los modelos de separación…" : "Preparando el modelo de notas…" });
     const be = await backend(wasmUrl, prefer);
     model ??= tf.loadGraphModel(modelUrl);
@@ -189,7 +224,8 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       const hasSix = !!(userStems.guitar || userStems.piano);
       const mono = { vocals: m("vocals"), drums: m("drums"), bass: m("bass"), other: m("other"), guitar: hasSix ? m("guitar") : undefined, piano: hasSix ? m("piano") : undefined };
       const h2: InstrumentHint = { ...hint, vocals: hint?.vocals ?? (userStems.vocals ? undefined : false), bass: hint?.bass ?? (userStems.bass ? undefined : false), drums: hint?.drums ?? (userStems.drums ? true : false) };
-      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2 }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
+      const rhythm = beat ? await neuralRhythm(mix, beat, beat.ort, 3) : null;
+      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
         (pct, msg) => post({ type: "progress", pct, msg }));
       post({ type: "done", analysis, backend: `${be}+pistas`, ms: performance.now() - t0 });
       return;
@@ -198,8 +234,10 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       const notes = await notesOf(mix, sensitivity, "Escuchando las notas", 3, 72);
       post({ type: "progress", pct: 78, msg: "Midiendo el ritmo…" });
       const r = audioRhythm(mix, SR, drums && mode === "mix", (msg) => post({ type: "progress", pct: 82, msg }));
+      const nr = beat ? neuralBeats((await neuralRhythm(mix, beat, beat.ort, 86)) ?? { beats: [], downbeats: [] }, r.drums ?? []) : null;
+      if (nr) { r.beats = nr.beats; r.tempo = nr.tempo; r.tempoConf = 1; }
       post({ type: "progress", pct: 92, msg: "Analizando armonía y estructura…" });
-      const analysis = analyzeNotes({ notes, drums: r.drums, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode, audio: r.features });
+      const analysis = analyzeNotes({ notes, drums: r.drums, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode, audio: r.features, meter: nr?.meter, downbeat: nr?.downbeat });
       if (r.tempoConf < 0.35) analysis.notesForUser.push("El pulso no es muy marcado: revisa el tempo y dónde empieza el compás.");
       post({ type: "done", analysis, backend: be, ms: performance.now() - t0 });
       return;
@@ -211,7 +249,8 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       bass: toMono22k(...stems.bass), other: toMono22k(...stems.other),
       guitar: stems.guitar ? toMono22k(...stems.guitar) : undefined, piano: stems.piano ? toMono22k(...stems.piano) : undefined,
     };
-    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint }, (pcm, label, from, span) => notesOf(pcm, sensitivity, label, from, span),
+    const rhythm = beat ? await neuralRhythm(mix, beat, sep.ort, 61) : null;
+    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
       (pct, msg) => post({ type: "progress", pct, msg }));
     post({ type: "done", analysis, backend: `${be}+${ep}`, ms: performance.now() - t0 });
   } catch (err) {

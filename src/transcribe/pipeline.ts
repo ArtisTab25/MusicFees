@@ -24,7 +24,7 @@ export function presence(src: Float32Array, mix: Float32Array): Float32Array {
   return out;
 }
 
-export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint },
+export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint; rhythm?: NeuralRhythm },
   notesOf: NotesFn, progress: (pct: number, msg: string) => void = () => {}): Promise<Analysis> {
   const hint = opts.hint ?? {};
   // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos). Si el
@@ -69,9 +69,14 @@ export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, op
   const otherTimbre = noteTimbres(mono.other, SR, otherNotes);
   progress(95, "Midiendo el ritmo y la armonía…");
   const r = audioRhythm(mix, SR, false);
-  const half = halveByBackbeat(r.beats, drumHits);
-  if (half) { r.beats = half; r.tempo /= 2; }
+  const nr = opts.rhythm ? neuralBeats(opts.rhythm, drumHits) : null;
+  if (nr) { r.beats = nr.beats; r.tempo = nr.tempo; r.tempoConf = 1; }
+  else {
+    const half = halveByBackbeat(r.beats, drumHits);
+    if (half) { r.beats = half; r.tempo /= 2; }
+  }
   const analysis = analyzeNotes({ notes: [], drums: drumHits, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode: opts.mode, audio: r.features,
+    meter: nr?.meter, downbeat: nr?.downbeat,
     stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre, guitar, keys, guitarTimbre, hint } });
   if (r.tempoConf < 0.35) analysis.notesForUser.push("El pulso no es muy marcado: revisa el tempo y dónde empieza el compás.");
   if (!vocals.length && hint.vocals !== false && sung < minSung) analysis.notesForUser.push("No encontré voz cantada: la melodía principal sale de los instrumentos.");
@@ -103,4 +108,42 @@ export function halveByBackbeat(beats: number[], drums: RawNote[]): number[] | n
   let best = 0, bv = -1;
   for (const ph of [0, 1]) { let v = 0; for (const k of kicks) { const q = pos(k); const r = Math.round(q); if (Math.abs(q - r) < 0.15 && ((r - ph) & 1) === 0) v++; } if (v > bv) { bv = v; best = ph; } }
   return beats.filter((_, i) => ((i - best) & 1) === 0);
+}
+
+/** Pulsos y tiempos fuertes de una red (Beat This!): segundos. */
+export interface NeuralRhythm { beats: number[]; downbeats: number[] }
+
+/**
+ * Pulso, tempo, compás y primer tiempo fuerte a partir de lo que dio la red. El compás es la cantidad de
+ * tiempos más común entre tiempos fuertes (MusicFees escribe 3/4 o 4/4: 6 cuenta como 3 y 2 como 4).
+ */
+export function fromNeural(nr: NeuralRhythm): { beats: number[]; tempo: number; meter?: 3 | 4; downbeat?: number } | null {
+  const beats = nr.beats;
+  if (beats.length < 8) return null;
+  const ibi = beats.slice(1).map((t, i) => t - beats[i]);
+  const med = [...ibi].sort((a, b) => a - b)[ibi.length >> 1];
+  // Promedio de las separaciones normales (los pulsos vienen en cuadros de 20 ms: la mediana sola redondea el tempo)
+  const ok = ibi.filter((d) => Math.abs(d - med) < 0.15 * med);
+  const tempo = 60 / (ok.reduce((a, b) => a + b, 0) / ok.length);
+  const idx = nr.downbeats.map((d) => { let k = 0; for (let i = 1; i < beats.length; i++) if (Math.abs(beats[i] - d) < Math.abs(beats[k] - d)) k = i; return k; });
+  const cnt: Record<number, number> = {};
+  for (let i = 1; i < idx.length; i++) { const n = idx[i] - idx[i - 1]; const m = n === 6 ? 3 : n === 2 || n === 8 ? 4 : n; cnt[m] = (cnt[m] ?? 0) + 1; }
+  const best = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+  if (!best || idx.length < 3) return { beats, tempo };
+  const meter = (Number(best[0]) === 3 ? 3 : 4) as 3 | 4;
+  // Primer tiempo fuerte: la fase más votada (resiste algún tiempo fuerte suelto mal puesto)
+  const ph = new Array(meter).fill(0); for (const k of idx) ph[k % meter]++;
+  const downbeat = ph.indexOf(Math.max(...ph));
+  return { beats, tempo, meter, downbeat };
+}
+
+/**
+ * Lo de la red con la misma corrección de tempo doble que el detector propio: Beat This! a veces sigue
+ * las corcheas (canciones escritas «a medio tiempo»); si la caja cae cada 4 de sus pulsos, se toma la mitad.
+ */
+export function neuralBeats(nr: NeuralRhythm, drums: RawNote[]) {
+  const half = halveByBackbeat(nr.beats, drums);
+  // A medio tiempo, los tiempos fuertes de la red caen cada 2 pulsos (la mitad no lo son): el compás y su
+  // inicio los decide entonces el análisis propio (acentos, bajo, armonía, patrón de batería).
+  return fromNeural(half ? { beats: half, downbeats: [] } : nr);
 }

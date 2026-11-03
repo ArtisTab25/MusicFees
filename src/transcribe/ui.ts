@@ -9,7 +9,7 @@ import { CHORDS, voicings } from "../score/chords";
 import { TUNINGS } from "../score/instruments";
 import { ARTIFACT } from "../config";
 import { downloadPack, hasPack } from "../player/downloads";
-import { DEMUCS_WEIGHT_BYTES, sepPlan, threadsFor } from "./packs";
+import { BEAT_PACKS, BEAT_WEIGHT_BYTES, DEMUCS_WEIGHT_BYTES, SEP_PACKS, sepPlan, threadsFor } from "./packs";
 import type { Pack } from "../player/downloads";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
 import { analyzeScore } from "./symbolic";
@@ -120,13 +120,20 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
   const Q: [Quality, string][] = [["fiel", "Fiel"], ["fielRapida", "Fiel (rápida)"], ["rapida", "Rápida"]];
   const qBtns = h("div", { class: "menu-tabs", role: "group", "aria-label": "Calidad" }, Q.map(([k, l]) => h("button", { "aria-pressed": quality === k, onclick: () => setQ(k) }, l)));
   const qNote = h("p", { class: "note" });
+  // Beat This!: medido con las partituras de Brayand, acierta más los pulsos (+2 a +6 puntos) pero se
+  // equivoca más en dónde empieza el compás en canciones no vistas (−10). Por eso es opcional.
+  const aiBeat = h("input", { type: "checkbox", checked: !!c.prefs.trBeatAI, onchange: () => { c.prefs.trBeatAI = aiBeat.checked; c.savePrefs(); void drawQ(); } }) as HTMLInputElement;
+  const aiNote = h("p", { class: "note" }, "Marca mejor los pulsos, pero a veces pone el inicio del compás en otro tiempo o cuenta al doble en ritmos de shuffle. Descarga 41 MB una vez. Pruébalo si el tempo o el pulso salen mal.");
   const plan = () => sepPlan(quality === "fielRapida", !!c.prefs.noDemucs, readHint().vocals !== false);
   const drawQ = async () => {
     if (quality === "rapida") { qNote.textContent = "Transcribe la mezcla tal cual. Mucho más rápida, menos fiel cuando suenan varios instrumentos."; return; }
     const pl = plan();
-    const have = (await Promise.all(pl.packs.map(([, p]) => hasPack(p)))).every(Boolean);
+    const ai = !!c.prefs.trBeatAI;
+    const all = [...pl.packs.map(([, p]) => p), ...(ai ? [BEAT_PACKS.graph, BEAT_PACKS.weights] : [])];
+    const have = (await Promise.all(all.map((p) => hasPack(p)))).every(Boolean);
+    const mb = pl.mb + (ai ? BEAT_PACKS.graph.mb + BEAT_PACKS.weights.mb : 0);
     const cores = self.crossOriginIsolated ? threadsFor(navigator.hardwareConcurrency) : 1;
-    qNote.textContent = `Separa la mezcla con ${pl.label} y transcribe cada fuente por separado.${quality === "fielRapida" ? (pl.engine === "demucs" ? " La batería sale de Demucs (lee un poco peor el hi-hat y la caja)." : " Sin el modelo de voz si dices que no hay voz.") : ""} ${have ? "Modelos ya descargados." : `Descarga ${Math.round(pl.mb)} MB una sola vez.`} Usa ${cores} ${cores === 1 ? "núcleo" : "núcleos"} del procesador. En el teléfono, mejor un fragmento de 30–60 s.`;
+    qNote.textContent = `Separa la mezcla con ${pl.label} y transcribe cada fuente por separado.${quality === "fielRapida" ? (pl.engine === "demucs" ? " La batería sale de Demucs (lee un poco peor el hi-hat y la caja)." : " Sin el modelo de voz si dices que no hay voz.") : ""} ${have ? "Modelos ya descargados." : `Descarga ${Math.round(mb)} MB una sola vez${ai ? " (incluye Beat This!)" : ""}.`} Usa ${cores} ${cores === 1 ? "núcleo" : "núcleos"} del procesador. En el teléfono, mejor un fragmento de 30–60 s.`;
   };
   function setQ(k: Quality) {
     quality = k; c.prefs.trQuality = k; c.prefs.trFaithful = k !== "rapida"; c.savePrefs();
@@ -179,10 +186,23 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
           : { ort: got.ort, drums: got.drums, vocals: got.vocals, bass: got.bass, fast: pl.fast };
       } catch (e) { busy(false); status.textContent = `${(e as Error).message} Puedes usar la calidad «Rápida» mientras tanto.`; return; }
     }
+    // Pulso y compás con Beat This! (opcional): en «Fiel» se baja (41 MB, una vez); en «Rápida», solo si ya
+    // está guardado. Si no se puede, se sigue con el detector propio.
+    let beat: WorkerIn["beat"];
+    if (mode === "mix" && c.prefs.trBeatAI) {
+      try {
+        const ready = useSep || ((await hasPack(BEAT_PACKS.weights)) && (await hasPack(BEAT_PACKS.graph)) && (await hasPack(SEP_PACKS.ort)));
+        if (ready) {
+          const dl = (p: Pack) => downloadPack(p, (pct) => { status.textContent = `Descargando Beat This! (pulso y compás, una sola vez)… ${Math.round(pct)} %`; }).then((b) => b.slice().buffer);
+          const graph = await dl(BEAT_PACKS.graph), weights = await dl(BEAT_PACKS.weights);
+          if (weights.byteLength === BEAT_WEIGHT_BYTES) beat = { graph, weights, ort: useSep ? undefined : await dl(SEP_PACKS.ort) };
+        }
+      } catch { beat = undefined; }
+    }
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
-    const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, hint: mode === "mix" ? readHint() : undefined };
-    launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])], opts, sep?.demucs ? () => {
+    const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, beat, hint: mode === "mix" ? readHint() : undefined };
+    launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : []), ...(beat ? [beat.graph, beat.weights, beat.ort].filter((b): b is ArrayBuffer => !!b) : [])], opts, sep?.demucs ? () => {
       // Demucs no avanzó (memoria del teléfono): se recuerda y se repite con MDX-Net.
       c.prefs.noDemucs = true; c.savePrefs(); void drawQ();
       status.textContent = "Este equipo no pudo con la separación en 6 fuentes (memoria). Sigo con la de 3 modelos…";
@@ -285,7 +305,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, file, recBtn), status),
     trim,
     h("div", { class: "sec" }, h("h3", null, "Qué tiene la grabación"), modeBtns, soloField, drumsRow),
-    h("div", { class: "sec" }, h("h3", null, "Calidad"), qBtns, qNote),
+    h("div", { class: "sec" }, h("h3", null, "Calidad"), qBtns, qNote, h("label", { class: "inline" }, aiBeat, "Pulso y compás con red neuronal (Beat This!, experimental)"), aiNote),
     h("div", { class: "sec" }, h("h3", null, "Ajustes"),
       h("div", { class: "field" }, h("label", null, "Título"), title),
       h("div", { class: "field" }, h("label", null, "Sensibilidad"), sens),

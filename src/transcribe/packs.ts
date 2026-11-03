@@ -25,6 +25,15 @@ export const DEMUCS_PACKS = {
 export const DEMUCS_WEIGHT_BYTES = 54829104;
 export const DEMUCS_SEG_APP = 171990;
 
+// Beat This! (CPJKU, MIT): pulso, tiempos fuertes y compás con una red neuronal. Red y pesos en float16.
+const NOTE_BT = "Pulso y compás con red neuronal (Beat This!).";
+export const BEAT_PACKS = {
+  graph: { id: "beatthis-graph", name: "Beat This! (red)", mb: 0.9, rev: 1, files: parts("beatthis/graph", 1), note: NOTE_BT } as Pack,
+  weights: { id: "beatthis-weights", name: "Beat This! (pesos)", mb: 40.5, rev: 1, files: parts("beatthis/weights", 3), note: NOTE_BT } as Pack,
+};
+/** Tamaño exacto de los pesos de Beat This! (20 251 488 en float16). */
+export const BEAT_WEIGHT_BYTES = 40502976;
+
 export interface SepPlan {
   engine: "demucs" | "mdx";
   /** Muestras por trozo de Demucs. */

@@ -319,3 +319,29 @@ test("indicación de instrumentos: sin teclado todo va a guitarra; dos guitarras
   assert.match(g[1].name ?? "", /punteo/);
   assert.ok(g[1].notes.every((n) => n.p >= 72), "el punteo es la línea aguda");
 });
+
+test("Beat This!: espectrograma, picos y compás desde los tiempos fuertes", async () => {
+  const { btSpectrogram, btPeaks, beatThis, BT_SR } = await import("../src/transcribe/beatthis");
+  const { fromNeural } = await import("../src/transcribe/pipeline");
+  // 2 s de seno: 101 cuadros de 128 bandas, finitos y ≥ 0
+  const x = new Float32Array(BT_SR * 2).map((_, i) => 0.3 * Math.sin((2 * Math.PI * 440 * i) / BT_SR));
+  const sp = btSpectrogram(x);
+  assert.equal(sp.length, 101); assert.equal(sp[0].length, 128);
+  assert.ok(sp.every((r) => r.every((v) => Number.isFinite(v) && v >= 0)));
+  // picos: máximos locales positivos; dos cuadros pegados se promedian
+  const lg = new Float32Array(200).fill(-5); lg[25] = 2; lg[50] = 1; lg[51] = 1; lg[100] = 3; lg[102] = 1;
+  assert.deepEqual(btPeaks(lg), [0.5, 50.5 / 50, 2]);
+  // 120 bpm, tiempos fuertes cada 4 empezando en el segundo pulso → 4/4 con anacrusa de 1
+  const beats = Array.from({ length: 40 }, (_, i) => 0.25 + i * 0.5), downbeats = beats.filter((_, i) => i % 4 === 1);
+  const r = fromNeural({ beats, downbeats })!;
+  assert.equal(Math.round(r.tempo), 120); assert.equal(r.meter, 4); assert.equal(r.downbeat, 1);
+  const w = fromNeural({ beats, downbeats: beats.filter((_, i) => i % 3 === 0) })!;
+  assert.equal(w.meter, 3); assert.equal(w.downbeat, 0);
+  // recorrido por trozos (40 s = 2 trozos): una red que no marca nada no inventa pulsos
+  const long = new Float32Array(BT_SR * 40);
+  const out = await beatThis(long, async (_spec, frames) => {
+    const b = new Float32Array(frames).fill(-3), d = new Float32Array(frames).fill(-3);
+    return { beat: b, downbeat: d };
+  });
+  assert.deepEqual(out, { beats: [], downbeats: [] });
+});

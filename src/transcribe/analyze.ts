@@ -10,7 +10,7 @@ import type { StemNotes } from "./types";
 import { analyzeCounterpoint, type VNote } from "./counterpoint";
 
 /** Ajustes del modo de 6 fuentes (calibrados con las partituras de Brayand). */
-export const SIX_OPTS = { leftover: false };
+export const SIX_OPTS = { leftover: false, dedupe: true };
 
 /** Posición en tiempos (negras, con decimales) de un instante, según la lista de tiempos. */
 export function beatPos(beats: number[], t: number): number {
@@ -118,6 +118,20 @@ export function analyzeNotes(input: {
       // Con la guitarra ya aparte, la línea principal de «lo demás» suele ser viento, cuerda o sinte (medido).
       if (leadHint === "gtr_clean") leadHint = "lead_saw";
     } else { G = L.guitar; K = L.keys; }
+    if (SIX_OPTS.dedupe && (gtr6 || keys6)) {
+      // Lo que se coló de una fuente en otra (la guitarra en «lo demás» o en el piano) sale dos veces:
+      // misma nota, mismo momento. Se queda en la fuente donde suena más fuerte.
+      const dup = (a: RawNote[], b: RawNote[], tie = true) => {
+        const bs = [...b].sort((x, y) => x.s - y.s);
+        return a.filter((n) => {
+          let lo = 0, hi = bs.length; while (lo < hi) { const m = (lo + hi) >> 1; if (bs[m].s < n.s - 0.06) lo = m + 1; else hi = m; }
+          for (let i = lo; i < bs.length && bs[i].s <= n.s + 0.06; i++) if (bs[i].p === n.p && (tie ? bs[i].a >= n.a : bs[i].a > n.a)) return false;
+          return true;
+        });
+      };
+      lead = dup(dup(lead, G), K);
+      const K2 = dup(K, G), G2 = dup(G, K, false); G = G2; K = K2; // en empate se queda en la guitarra
+    }
     // Lo que indicó el usuario manda sobre lo que se adivinó.
     const H = stems.hint ?? {};
     if (H.guitars === 0 && H.keys !== 0) { K = [...K, ...G]; G = []; }

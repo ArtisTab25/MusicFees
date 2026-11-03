@@ -19,7 +19,7 @@ for (const f of drop) rmSync(join(OUT, f), { force: true });
 renameSync(join(OUT, "soundfont/GeneralUser-GS.sf3"), join(OUT, "soundfont/GeneralUser-GS.sf3.ogg"));
 for (const f of readdirSync(join(OUT, "samples"))) renameSync(join(OUT, "samples", f), join(OUT, "samples", `${f}.ogg`));
 // Modelos de separación y motor ONNX (partes de 15 MB): también como .ogg.
-for (const d of ["models/mdx/vocals", "models/mdx/drums", "models/mdx/bass", "models/ort", "models/demucs/graph39", "models/demucs/weights"]) {
+for (const d of ["models/mdx/vocals", "models/mdx/drums", "models/mdx/bass", "models/ort", "models/demucs/graph39", "models/demucs/weights", "models/beatthis/graph", "models/beatthis/weights"]) {
   const dir = join(OUT, d);
   if (existsSync(dir)) for (const f of readdirSync(dir)) if (f.endsWith(".bin")) renameSync(join(dir, f), join(dir, `${f}.ogg`));
 }

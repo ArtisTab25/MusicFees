@@ -43,6 +43,13 @@ jobs:
           pip install --quiet torch torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install --quiet demucs onnx einops
           python scripts/export-demucs.py .cache/demucs/5c90dfd2-34c22ccb.th .cache/demucs
+      # Beat This! (CPJKU, MIT; conversión a ONNX de tuneperfect, MIT): pulso y compás. Huella comprobada.
+      - name: Preparar Beat This!
+        run: |
+          mkdir -p .cache/beatthis
+          curl -sSL -o .cache/beatthis/beat_this.onnx https://huggingface.co/tuneperfect/beat-this-onnx/resolve/main/beat_this.onnx
+          echo "926847099887de0d577509824846c89797b02fb28e35fc004c3add149c465891  .cache/beatthis/beat_this.onnx" | sha256sum -c -
+          python scripts/pack-beatthis.py .cache/beatthis/beat_this.onnx .cache/beatthis
       - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

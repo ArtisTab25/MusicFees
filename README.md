@@ -47,6 +47,12 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.6: Fiel con menos notas de más y pulso con red neuronal (opcional)
+
+- **Fiel escribe menos notas fantasma.** Sobre las fuentes separadas, el modelo de notas oía también los restos de la separación y escribía notas de más; por eso «Rápida» a veces sonaba más limpia aunque acierta mucho menos (bajo 38 % contra 71 %, notas en la pista correcta 6 % contra 80 %). Ahora la sensibilidad sobre fuentes separadas es 0,7 × la elegida, y lo que se coló de una fuente a otra (misma nota, mismo momento) queda solo donde suena más fuerte. Medido con las partituras de Brayand: notas acertadas 33,6 → 35,5 % y 29,4 → 31,8 % (fragmentos no vistos), reparto 79,9 → 81,0 % y 75,0 → 75,9 %.
+- **Pulso y compás con Beat This!** (CPJKU, MIT; casilla «experimental» en Calidad, descarga 41 MB una vez). Marca mejor los pulsos (+2 y +6 puntos), pero en canciones no vistas pone peor el inicio del compás (−10) y en shuffle cuenta 1,5 veces el tempo. Por eso no está activado de fábrica. El espectrograma que necesita lo calcula MusicFees (igual al original con diferencia de 0,00004) y los pesos van en float16 (41 MB en vez de 82, mismo resultado).
+- **Kit de entrenamiento** más robusto: solo canciones completas de Slakh y sin caerse por pistas más cortas que la mezcla.
+
 ## Versión 1.3.5: separación más rápida, varios núcleos, sin internet y kit para entrenar
 
 - **Ya no se queda en «Preparando la separación en 6 fuentes»**: Demucs separa en trozos de 3,9 s (antes 7,8 s), que gastan la mitad de memoria (≈1,6 GB en vez de 2,9 GB) con la misma calidad medida en las partituras de Brayand. Los teléfonos usan Demucs solo si declaran 6 GB de memoria o más; si la separación deja de avanzar 3 minutos, la app cambia sola a MDX-Net y lo recuerda.

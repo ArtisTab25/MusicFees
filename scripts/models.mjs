@@ -60,6 +60,13 @@ else {
     rmSync(join(OUT, "demucs", "graph"), { recursive: true, force: true }); // red de 7,8 s: ya no se usa
     log(`Demucs 6 fuentes (trozos de 3,9 s): red ${split(g, join(OUT, "demucs", "graph39"))} parte(s), pesos ${split(w, join(OUT, "demucs", "weights"))} partes · sha256 ${createHash("sha256").update(w).digest("hex").slice(0, 12)}`);
   } else log("Sin Demucs 6 fuentes (corre scripts/export-demucs.py): el modo Fiel usará los tres modelos MDX-Net.");
+  // Beat This! (CPJKU, MIT): lo prepara scripts/pack-beatthis.py en .cache/beatthis (GitHub Actions lo corre).
+  const BT = join(ROOT, ".cache", "beatthis");
+  const btg = join(BT, "beat_this.graph.onnx"), btw = join(BT, "beat_this.f16");
+  if (existsSync(btg) && existsSync(btw)) {
+    const w = readFileSync(btw);
+    log(`Beat This!: red ${split(readFileSync(btg), join(OUT, "beatthis", "graph"))} parte(s), pesos ${split(w, join(OUT, "beatthis", "weights"))} partes · sha256 ${createHash("sha256").update(w).digest("hex").slice(0, 12)}`);
+  } else log("Sin Beat This! (corre scripts/pack-beatthis.py): el pulso y el compás usan el detector propio.");
   const wasm = join(ROOT, "node_modules", "onnxruntime-web", "dist", "ort-wasm-simd-threaded.jsep.wasm");
   if (existsSync(wasm)) log(`ONNX Runtime Web: ${split(readFileSync(wasm), join(OUT, "ort"))} partes.`);
   else log("Falta onnxruntime-web (corre npm install).");
