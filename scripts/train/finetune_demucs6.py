@@ -84,7 +84,7 @@ class Slakh(torch.utils.data.IterableDataset):
                 return None
             src = self._load(tr, rng.randrange(0, n - self.seg))
             if rng.random() < self.remix:  # otra canción presta una fuente (más combinaciones)
-                k = rng.choice(TRAIN)
+                k = rng.choice(TRAIN)  # (las mezclas nuevas valen para cualquier fuente)
                 tr2 = rng.choice(self.tracks)
                 n2 = sf.info(os.path.join(tr2, "mix.flac")).frames
                 if n2 > self.seg:
@@ -123,10 +123,22 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--segment", type=float, default=3.9, help="segundos por trozo (la app usa 3,9 s)")
+    ap.add_argument("--learn", default="drums,bass,other,guitar,piano", help="fuentes que aprenden de Slakh")
+    ap.add_argument("--keep", default="", help="fuentes que deben seguir sonando como el modelo original (se copian de él)")
+    ap.add_argument("--snapshots", type=int, default=0, help="guarda además una copia cada N pasos (<out>.pasoN.th)")
     a = ap.parse_args()
+    learn = [SOURCES.index(x) for x in a.learn.split(",") if x]
+    keep = [SOURCES.index(x) for x in a.keep.split(",") if x]
+    print("aprenden de Slakh:", [SOURCES[k] for k in learn], "· se conservan:", [SOURCES[k] for k in keep], flush=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model, pkg = load_model(a.ckpt)
     model.to(dev).train()
+    teacher = None
+    if keep:  # copia congelada del modelo original: las fuentes «keep» se comparan contra lo que él separa
+        import copy
+        teacher = copy.deepcopy(model).eval()
+        for prm in teacher.parameters():
+            prm.requires_grad_(False)
     # La app separa en trozos de 3,9 s: se afina igual (y cabe en menos memoria).
     model.segment = fractions.Fraction(a.segment).limit_denominator(100)
     seg = int(model.segment * model.samplerate)
@@ -139,7 +151,11 @@ def main():
         mix, src = mix.to(dev), src.to(dev)
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
             est = model(mix)
-            loss = (est[:, TRAIN] - src[:, TRAIN]).abs().mean()  # L1 en la forma de onda, como Demucs
+            loss = (est[:, learn] - src[:, learn]).abs().mean()  # L1 en la forma de onda, como Demucs
+            if teacher is not None:
+                with torch.no_grad():
+                    ref = teacher(mix)
+                loss = loss + (est[:, keep] - ref[:, keep]).abs().mean()
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
@@ -164,6 +180,10 @@ def main():
             state = {k: v.detach().half().cpu() for k, v in model.state_dict().items()}
             torch.save({**pkg, "state": state}, a.out)
             print(f"guardado {a.out}", flush=True)
+            if a.snapshots and step % a.snapshots == 0 and step != a.steps:
+                snap = a.out.replace(".th", f".paso{step}.th")
+                torch.save({**pkg, "state": state}, snap)
+                print(f"copia {snap}", flush=True)
         if step >= a.steps:
             break
 

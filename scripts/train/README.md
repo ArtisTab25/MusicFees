@@ -29,6 +29,23 @@ de verdad necesita una tarjeta gráfica.
 
 3. Descarga `export/htdemucs_6s.f16` y `export/htdemucs_6s.graph39.onnx`.
 
+## Resultado del primer entrenamiento (3 nov 2026) y segundo intento
+
+Primera corrida (todas las fuentes aprenden de Slakh, 20 000 pasos, 3 h 51 min en T4): **no se publicó**.
+Con las 9 canciones de Brayand (dos grupos de fragmentos), contra los pesos originales en las mismas condiciones:
+bajo 71,3 → 66,3 y 64,1 → 59,3 % (en «newblues» 81 → 41), notas 32,9 → 30,3 y 29,8 → 25,7 %; mejoró el
+reparto entre instrumentos (78,7 → 79,3 y 74,6 → 83,0 %) y la raíz de los acordes (+2 y +2,6).
+El bajo sintético de Slakh enseñó un bajo distinto al de las grabaciones reales.
+
+Segunda corrida recomendada: solo guitarra y piano aprenden de Slakh; batería, bajo, lo demás y voz se
+comparan contra el modelo original (copia congelada), para que no cambien. Tasa de aprendizaje más baja y
+copias intermedias para medir cuál conviene:
+
+```bash
+!python scripts/train/finetune_demucs6.py --data /tmp/slakh --ckpt 5c90dfd2-34c22ccb.th --out /kaggle/working/demucs6_slakh.th \
+    --steps 12000 --batch 4 --lr 1e-5 --learn guitar,piano --keep drums,bass,other,vocals --snapshots 4000
+```
+
 ## Medir antes de usar
 
 Con las partituras de Brayand: separa los fragmentos con los pesos nuevos y corre el mismo evaluador que
