@@ -36,7 +36,9 @@ class Slakh(torch.utils.data.IterableDataset):
     fuente, mezclas nuevas (se puede intercambiar una fuente entre canciones) y paneo estéreo."""
 
     def __init__(self, root: str, split: str, seg: int, sr: int = 44100, remix: float = 0.5):
-        self.tracks = sorted(glob.glob(os.path.join(root, split, "Track*")))
+        self.tracks = [t for t in sorted(glob.glob(os.path.join(root, split, "Track*")))
+                       if os.path.exists(os.path.join(t, "mix.flac")) and os.path.exists(os.path.join(t, "metadata.yaml"))]
+        print(f"{split}: {len(self.tracks)} canciones", flush=True)
         if not self.tracks:
             sys.exit(f"No encontré canciones en {os.path.join(root, split)}")
         self.seg, self.sr, self.remix = seg, sr, remix
@@ -50,9 +52,10 @@ class Slakh(torch.utils.data.IterableDataset):
             f = os.path.join(tr, "stems", f"{sid}.flac")
             if not os.path.exists(f):
                 continue
-            x, sr = sf.read(f, start=start, frames=self.seg, dtype="float32", always_2d=False)
-            if sr != self.sr:
-                continue
+            info = sf.info(f)
+            if info.samplerate != self.sr or start >= info.frames:
+                continue  # pista más corta que la mezcla: aquí ya calló (buscar más allá del final da error)
+            x, sr = sf.read(f, start=start, frames=min(self.seg, info.frames - start), dtype="float32", always_2d=False)
             if x.ndim > 1:
                 x = x.mean(1)
             out[SOURCES.index(group_of(m)), : len(x)] += x
@@ -60,12 +63,25 @@ class Slakh(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         rng = random.Random(os.getpid() + int(time.time()))
+        malas = 0
         while True:
+            try:
+                item = self._sample(rng)
+            except Exception as e:  # un archivo dañado no detiene el entrenamiento
+                malas += 1
+                if malas <= 5 or malas % 100 == 0:
+                    print(f"aviso: trozo descartado ({type(e).__name__}); van {malas}", flush=True)
+                continue
+            if item is not None:
+                yield item
+
+    def _sample(self, rng):
+        if True:
             tr = rng.choice(self.tracks)
             mix = os.path.join(tr, "mix.flac")
             n = sf.info(mix).frames
             if n <= self.seg:
-                continue
+                return None
             src = self._load(tr, rng.randrange(0, n - self.seg))
             if rng.random() < self.remix:  # otra canción presta una fuente (más combinaciones)
                 k = rng.choice(TRAIN)
@@ -74,7 +90,7 @@ class Slakh(torch.utils.data.IterableDataset):
                 if n2 > self.seg:
                     src[k] = self._load(tr2, rng.randrange(0, n2 - self.seg))[k]
             if not src[[4, 5]].any():  # sin guitarra ni piano en el trozo: poco útil
-                continue
+                return None
             gains = np.array([10 ** (rng.uniform(-6, 3) / 20) for _ in range(6)], np.float32)[:, None]
             src = src * gains
             pans = np.array([rng.uniform(0.2, 0.8) for _ in range(6)], np.float32)
@@ -83,7 +99,7 @@ class Slakh(torch.utils.data.IterableDataset):
             peak = np.abs(mixw).max() + 1e-6
             if peak > 0.99:
                 st, mixw = st / peak * 0.99, mixw / peak * 0.99
-            yield torch.from_numpy(mixw), torch.from_numpy(st)
+            return torch.from_numpy(mixw), torch.from_numpy(st)
 
 
 def load_model(path: str):
@@ -143,7 +159,7 @@ def main():
                     for k in TRAIN:
                         num = (s[k] ** 2).sum(); den = ((s[k] - e[k]) ** 2).sum()
                         sdr[k] += float(10 * torch.log10((num + 1e-8) / (den + 1e-8))) / 8
-            print("SDR validación:", {SOURCES[k]: round(sdr[k], 2) for k in TRAIN}, flush=True)
+            print("SDR validación:", {SOURCES[k]: round(float(sdr[k]), 2) for k in TRAIN}, flush=True)
             model.train()
             state = {k: v.detach().half().cpu() for k, v in model.state_dict().items()}
             torch.save({**pkg, "state": state}, a.out)
