@@ -245,3 +245,36 @@ test("compás por repetición del patrón: 3/4 contra 4/4", async () => {
   assert.equal(patternMeter(beats, mk(3), [], chroma)?.meter, 3);
   assert.equal(patternMeter(beats, mk(4), [], chroma)?.meter, 4);
 });
+
+test("MIDI: lee pistas, programa, tempo y compás, y arma una parte por pista", async () => {
+  const { parseMidi, midiToAnalysis } = await import("../src/transcribe/midifile");
+  const vlq = (v: number) => { const o = [v & 0x7f]; while ((v >>= 7)) o.unshift((v & 0x7f) | 0x80); return o; };
+  const u32 = (v: number) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
+  const trk = (evs: [number, number[]][]) => { const d: number[] = []; let last = 0; for (const [tk, m] of evs) { d.push(...vlq(tk - last), ...m); last = tk; } d.push(0, 0xff, 0x2f, 0); return [0x4d, 0x54, 0x72, 0x6b, ...u32(d.length), ...d]; };
+  const ppq = 480;
+  // Pista 0: tempo 100 y 3/4. Pista 1: guitarra (programa 27) con Do–Fa–Sol–Do. Pista 2: bajo. Pista 3: batería.
+  const meta = trk([[0, [0xff, 0x51, 3, 0x09, 0x27, 0xc0]], [0, [0xff, 0x58, 4, 3, 2, 24, 8]]]);
+  const g: [number, number[]][] = [[0, [0xff, 0x03, 4, 71, 116, 114, 49]], [0, [0xc0, 27]]];
+  const b: [number, number[]][] = [[0, [0xc1, 33]]];
+  const d: [number, number[]][] = [];
+  for (let bar = 0; bar < 16; bar++) {
+    const t = bar * 3 * ppq, ch = [[48, 52, 55], [53, 57, 60], [55, 59, 62], [48, 52, 55]][bar % 4];
+    for (const p of ch) g.push([t, [0x90, p, 90]]);
+    for (const p of ch) g.push([t + 3 * ppq - 10, [0x80, p, 0]]);
+    b.push([t, [0x91, ch[0] - 12, 100]], [t + 3 * ppq - 10, [0x81, ch[0] - 12, 0]]);
+    for (let k = 0; k < 3; k++) d.push([t + k * ppq, [0x99, k ? 42 : 36, 100]], [t + k * ppq + 100, [0x89, k ? 42 : 36, 0]]);
+  }
+  const sorted = (x: [number, number[]][]) => x.sort((p, q) => p[0] - q[0]);
+  const bytes = new Uint8Array([0x4d, 0x54, 0x68, 0x64, ...u32(6), 0, 1, 0, 4, ppq >> 8, ppq & 255, ...meta, ...trk(sorted(g)), ...trk(sorted(b)), ...trk(sorted(d))]);
+  const song = parseMidi(bytes);
+  assert.equal(Math.round(song.tempoBpm), 100);
+  assert.equal(song.meter, 3);
+  assert.ok(song.aligned);
+  assert.equal(song.tracks.length, 3);
+  const a = midiToAnalysis(song, (prog, role) => (role === "drums" ? "drums" : prog === 27 ? "gtr_clean" : "bass_finger"));
+  assert.equal(a.meter, 3);
+  assert.deepEqual(a.parts.map((p) => p.role).sort(), ["bass", "drums", "guitar"]);
+  assert.equal(a.parts.find((p) => p.role === "guitar")!.name, "Gtr1");
+  assert.equal(a.key.name, "Do mayor");
+  assert.ok(a.chords.some((c) => c.name === "C") && a.chords.some((c) => c.name === "G"));
+});

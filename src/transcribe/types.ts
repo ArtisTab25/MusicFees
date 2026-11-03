@@ -13,10 +13,14 @@ export interface RawNote {
 export type Role = "vocals" | "melody" | "guitar" | "keys" | "harmony" | "bass" | "drums" | "all";
 
 /** `hint`: instrumento sugerido por el timbre (preset de MusicFees). */
-export interface Part { role: Role; notes: RawNote[]; hint?: string }
+export interface Part { role: Role; notes: RawNote[]; hint?: string; /** Nombre propio de la pista (p. ej. el del MIDI importado). */ name?: string; /** Instrumento elegido para esta parte (si no, el de su papel). */ preset?: string }
 
 /** Notas por fuente cuando la mezcla se separó antes de transcribir. */
-export interface StemNotes { vocals: RawNote[]; bass: RawNote[]; other: RawNote[]; otherTimbre: import("./timbre").NoteTimbre[] | null }
+export interface StemNotes {
+  vocals: RawNote[]; bass: RawNote[]; other: RawNote[]; otherTimbre: import("./timbre").NoteTimbre[] | null;
+  /** Separación de 6 fuentes (Demucs): guitarra y piano ya vienen aparte. */
+  guitar?: RawNote[]; keys?: RawNote[]; guitarTimbre?: import("./timbre").NoteTimbre[] | null;
+}
 
 export interface KeyInfo {
   tonic: number; // 0 = Do

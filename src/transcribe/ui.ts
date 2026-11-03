@@ -1,5 +1,6 @@
 // Interfaz del módulo «Análisis»: transcribir audio a pistas y analizar la canción abierta.
 // Se carga solo cuando se usa (el modelo de notas y TensorFlow.js viven en su propio worker).
+import { parseMidi, midiToAnalysis } from "./midifile";
 import type { AppCtx, Sheets } from "../ui/sheets";
 import { h } from "../ui/dom";
 import { PRESETS } from "../score/instruments";
@@ -161,6 +162,20 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     const msg: WorkerIn = { L, R, modelUrl, wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep };
     worker.postMessage(msg, [L.buffer, R.buffer, ...(sep ? Object.values(sep) : [])]);
   }
+  // MIDI hecho en otro lado (NeuralNote/MuScriptor en tu computadora, un teclado, otra app): MusicFees
+  // lo convierte en pistas con tablatura, acordes y análisis.
+  const midiIn = h("input", { type: "file", accept: ".mid,.midi,audio/midi", "aria-label": "Archivo MIDI", onchange: async () => {
+    const f = midiIn.files?.[0];
+    if (!f) return;
+    try {
+      const song = parseMidi(await f.arrayBuffer());
+      if (!song.tracks.length) throw new Error("no tiene notas");
+      const presetFor = (program: number, role: Role) => role === "drums" ? "drums" : (PRESETS.find((x) => x.program === program && x.kind !== "drums")?.id ?? undefined);
+      const a = midiToAnalysis(song, presetFor, (id, role) => (id ? PRESETS.find((x) => x.id === id)?.name : undefined) ?? ROLE_NAMES[role]);
+      const t = f.name.replace(/\.[^.]+$/, "") || "MIDI importado";
+      result(sheets, c, a, { mode: "mix", presets: {}, drums: true, sensitivity: 0.5, markDoubtful: false, title: t }, `MIDI importado · ${song.tracks.length} pistas`);
+    } catch (e) { c.toast(`No pude leer ese MIDI: ${(e as Error).message}`, true); }
+  } });
   sheets.panel("Transcribir audio", "full",
     h("p", { class: "note" }, "Convierte una canción, una pista o una grabación en una canción de MusicFees: una pista por parte, con su instrumento, en tablatura y partitura, con tempo, compás, tonalidad, acordes, secciones y análisis."),
     h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, file, recBtn), status),
@@ -174,6 +189,9 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       h("label", { class: "inline", for: "tr-mark" }, mark, "Marcar con 💬 los compases dudosos para revisarlos")),
     h("div", { class: "inline" }, go, cancel), bar,
     h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», modelos de separación MDX-Net (KUIELab, MIT) aíslan voz, batería y bajo; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
+    h("div", { class: "sec" }, h("h3", null, "¿Ya tienes un MIDI?"),
+      h("p", { class: "note" }, "Si transcribiste en tu computadora con NeuralNote (gratis, usa el modelo MuScriptor) u otra herramienta, importa aquí el MIDI: MusicFees lo convierte en pistas con tablatura, acordes, secciones y análisis."),
+      midiIn),
     h("p", { class: "note" }, "Transcribe solo música propia o que tengas derecho a usar."));
 }
 
@@ -183,13 +201,13 @@ function result(sheets: Sheets, c: AppCtx, a: Analysis, opts: TranscribeOpts, to
     const on = h("input", { type: "checkbox", checked: p.role !== "drums" || opts.drums });
     const kinds = p.role === "drums" ? ["drums"] : ["tab", "notation"];
     const sel = presetSelect(opts.presets[p.role] ?? suggestPreset(p), kinds);
-    return { p, on, sel, el: h("div", { class: "partrow" }, h("label", null, on, h("span", null, ROLE_NAMES[p.role], h("small", null, `${p.notes.length} notas`))), sel) };
+    return { p, on, sel, el: h("div", { class: "partrow" }, h("label", null, on, h("span", null, p.name ?? ROLE_NAMES[p.role], h("small", null, `${p.notes.length} notas`))), sel) };
   });
   const create = h("button", { class: "primary", onclick: async () => {
     const presets: Partial<Record<Role, string>> = {};
     const keep = rows.filter((r) => r.on.checked);
     if (!keep.length) { c.toast("Elige al menos una parte.", true); return; }
-    for (const r of keep) presets[r.p.role] = r.sel.value;
+    for (const r of keep) { presets[r.p.role] ??= r.sel.value; r.p.preset = r.sel.value; }
     create.disabled = true; create.textContent = "Creando…";
     try {
       const score = buildScore({ ...a, parts: keep.map((r) => r.p) }, { ...opts, presets, drums: keep.some((r) => r.p.role === "drums") });

@@ -21,6 +21,7 @@ export function suggestPreset(part: Part): string {
   if (part.role === "drums") return "drums";
   if (part.role === "bass") return "bass_finger";
   if (part.role === "vocals") return "voice";
+  if (part.preset) return part.preset;
   if (part.hint) return part.hint;
   // Rango real sin los extremos sueltos (un armónico mal leído no cambia el instrumento).
   const ps = part.notes.map((n) => n.p).sort((a, b) => a - b);
@@ -144,7 +145,7 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
   const parts = a.parts.filter((p) => p.notes.length && (p.role !== "drums" || opts.drums));
   const nBeats = Math.ceil(Math.max(1, ...parts.flatMap((p) => p.notes.map((n) => q(n.e))))) + 1;
   const plan = parts.map((p) => {
-    const presetId = opts.presets[p.role] ?? suggestPreset(p);
+    const presetId = p.preset ?? opts.presets[p.role] ?? suggestPreset(p);
     const preset = presetById(presetId) ?? presetById("gtr_clean")!;
     // Rejilla propia de cada pista: los acordes pagan más por subdividir (se leen mejor en corcheas).
     const chordal = p.role === "harmony" || p.role === "guitar" || p.role === "keys" || p.role === "all";
@@ -189,7 +190,7 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
     while (bars.length < nBars) bars.push(restsFor(cap));
     clipBars.push(bars.slice(0, nBars));
   }
-  plan.forEach((x, i) => ops.push({ k: "trackAdd", preset: x.preset.id, name: ROLE_NAMES[x.part.role], tuning: tunings[i] }));
+  plan.forEach((x, i) => ops.push({ k: "trackAdd", preset: x.preset.id, name: x.part.name ?? ROLE_NAMES[x.part.role], tuning: tunings[i] }));
   ops.push({ k: "trackDel", t: 0 });
   ops.push({ k: "songProp", prop: "tempo", val: Math.round(a.tempo) });
   for (let b = 0; b < nBars; b++) {

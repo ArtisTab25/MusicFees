@@ -9,6 +9,9 @@ import { cleanLine, splitOther } from "./timbre";
 import type { StemNotes } from "./types";
 import { analyzeCounterpoint, type VNote } from "./counterpoint";
 
+/** Ajustes del modo de 6 fuentes (calibrados con las partituras de Brayand). */
+export const SIX_OPTS = { leftover: false };
+
 /** Posición en tiempos (negras, con decimales) de un instante, según la lista de tiempos. */
 export function beatPos(beats: number[], t: number): number {
   const n = beats.length;
@@ -50,7 +53,8 @@ export function analyzeNotes(input: {
   // El bajo ya viene cortado por golpes (YIN): no se unen notas repetidas.
   const bassLine = stems ? cleanLine(stems.bass.filter((n) => n.p <= 67), "low", 0.07, false) : [];
   const other = stems ? removeOvertones(stems.other) : [];
-  const notes = stems ? [...other, ...bassLine] : input.notes;
+  const gtr6 = stems?.guitar ? removeOvertones(stems.guitar) : null, keys6 = stems?.keys ? removeOvertones(stems.keys) : null;
+  const notes = stems ? [...other, ...(gtr6 ?? []), ...(keys6 ?? []), ...bassLine] : input.notes;
   // Del audio: fuera los armónicos fantasma antes de todo lo demás.
   const pitched = (audio && !stems ? removeOvertones(notes) : notes).filter((n) => n.e > n.s);
   const { chroma, bass, energy } = beatChroma(pitched, beats);
@@ -103,9 +107,20 @@ export function analyzeNotes(input: {
   if (stems) {
     if (vocals.length >= 4) parts.push({ role: "vocals", notes: vocals, hint: "voice" });
     const L = splitOther(other, stems.otherTimbre && stems.otherTimbre.length === stems.other.length ? alignTimbre(stems.other, other, stems.otherTimbre) : null, sp);
+    if (gtr6 || keys6) {
+      // 6 fuentes: guitarra y piano salen de su propia pista; de «lo demás» queda la línea principal
+      // (vientos, cuerdas, sinte) y su acompañamiento se suma a la capa que le toca por timbre.
+      const G = [...(gtr6 ?? []), ...(SIX_OPTS.leftover ? L.guitar : [])], K = [...(keys6 ?? []), ...(SIX_OPTS.leftover ? L.keys : [])];
+      const gt = stems.guitarTimbre && stems.guitar && stems.guitarTimbre.length === stems.guitar.length ? alignTimbre(stems.guitar, gtr6 ?? [], stems.guitarTimbre) : [];
+      const bright = gt.length ? gt.reduce((x, t) => x + t.bright, 0) / gt.length : 0.4;
+      if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead === "gtr_clean" ? "lead_saw" : L.hints.lead });
+      if (G.length) parts.push({ role: "guitar", notes: cleanHarmony(G, chords, beats, !!bassLine.length), hint: bright > 0.9 ? "gtr_dist" : bright > 0.55 ? "gtr_od" : "gtr_clean" });
+      if (K.length) parts.push({ role: "keys", notes: cleanHarmony(K, chords, beats, !!bassLine.length), hint: L.hints.keys });
+    } else {
     if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead });
     if (L.guitar.length) parts.push({ role: "guitar", notes: cleanHarmony(L.guitar, chords, beats, !!bassLine.length), hint: L.hints.guitar });
     if (L.keys.length) parts.push({ role: "keys", notes: cleanHarmony(L.keys, chords, beats, !!bassLine.length), hint: L.hints.keys });
+    }
     if (bassLine.length) parts.push({ role: "bass", notes: bassLine });
     const toV = (ns: RawNote[]): VNote[] => ns.map((n) => ({ q0: Math.round(q(n.s) * 4) / 4, q1: Math.round(q(n.e) * 4) / 4, p: n.p })).filter((n) => n.q1 > n.q0);
     const top = vocals.length >= 4 ? vocals : L.lead;

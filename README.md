@@ -47,6 +47,12 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.2: importar MIDI (mitad en la computadora, mitad en la app)
+
+- **Transcribir audio → «¿Ya tienes un MIDI?»**: importa un .mid hecho en otro lado — por ejemplo con [NeuralNote](https://github.com/DamRsn/NeuralNote) v2 en tu computadora, que es gratis y usa MuScriptor, el modelo abierto de transcripción más preciso hoy (pesos CC BY-NC 4.0: uso no comercial, en tu equipo). MusicFees pone cada pista del MIDI con su instrumento (por su programa General MIDI y su nombre), en tablatura con la digitación más cómoda, con tonalidad, acordes, secciones y análisis. Si el MIDI no trae un tempo que coincida con las notas (lo normal al transcribir sin cuantizar), el pulso se calcula con los ataques; si lo trae, se respeta también su compás (3/4, 6/8).
+- Cada parte guarda su propio nombre e instrumento (antes, dos partes del mismo papel compartían instrumento).
+- Probado: separador de 6 fuentes Demucs v4 `htdemucs_6s` (MIT, 55 MB; guitarra y piano aparte) contra las partituras de Brayand. En fragmentos no vistos: bajo 62 → 67 %, notas en la pista correcta 64 → 67 % (77 % en los fragmentos de calibración), pero hi-hat 59 → 51 % y caja 63 → 57 %, y las notas polifónicas igual (~30 %). El código para usarlo ya está en el transcriptor (`stems.guitar`/`stems.keys`); falta llevar el modelo al navegador (ONNX, como hace demucs.onnx) para activarlo.
+
 ## Versión 1.3.1: calibrada con partituras reales
 
 Medido nota por nota contra 10 canciones de Brayand (cada .gp con su mp3 exportado), en fragmentos de 90 s y, para comprobar que no se ajustó de más, en otros fragmentos de 60 s que no se usaron para calibrar (tolerancia de 50 ms y la altura exacta):
