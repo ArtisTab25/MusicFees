@@ -14,6 +14,7 @@ import { analyzeNotes } from "./analyze";
 import { transcribeSeparated } from "./pipeline";
 import { MDX_NFFT, separateStem, toMono22k, type Stem } from "./separate";
 import { DEMUCS_SEG, separateDemucs } from "./demucs";
+import { threadsFor } from "./packs";
 import type { Analysis, InstrumentHint, RawNote } from "./types";
 
 export interface WorkerIn {
@@ -24,7 +25,7 @@ export interface WorkerIn {
    * Modo fiel: bytes del motor ONNX y de los modelos. Con `demucs` (red + pesos en float16) se separa en
    * 6 fuentes y de MDX-Net solo se usa la batería; sin él, los tres modelos MDX-Net.
    */
-  sep?: { ort: ArrayBuffer; drums: ArrayBuffer; vocals?: ArrayBuffer; bass?: ArrayBuffer; demucs?: { graph: ArrayBuffer; weights: ArrayBuffer } };
+  sep?: { ort: ArrayBuffer; drums?: ArrayBuffer; vocals?: ArrayBuffer; bass?: ArrayBuffer; demucs?: { graph: ArrayBuffer; weights: ArrayBuffer | null; seg: number }; fast?: boolean };
   /** Qué instrumentos dijo el usuario que hay. */
   hint?: InstrumentHint;
   /** Pistas que el usuario ya separó (Moises, BandLab, UVR…): no se separa, se transcribe cada una. */
@@ -115,15 +116,19 @@ async function session(bytes: ArrayBuffer, gpu: boolean, extra: ort.InferenceSes
  */
 async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<WorkerIn["sep"]>): Promise<{ stems: Separated; ep: string }> {
   ort.env.wasm.wasmBinary = sep.ort;
-  ort.env.wasm.numThreads = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  // Con aislamiento entre orígenes (service worker), varios núcleos; si no, uno.
+  ort.env.wasm.numThreads = (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated ? threadsFor(navigator.hardwareConcurrency) : 1;
   const gpu = await realGpu();
   const t0 = performance.now();
   const names: Record<string, string> = { vocals: "la voz", drums: "la batería", bass: "el bajo", demucs: "guitarra, piano, bajo y voz" };
+  const fast = !!sep.fast, seg = sep.demucs?.seg ?? DEMUCS_SEG, overlap = fast ? 0.1 : 0.25;
   const mdxChunks = Math.ceil(L.length / (1024 * 511 - 4096));
-  const demChunks = sep.demucs ? Math.ceil(L.length / Math.floor(0.75 * DEMUCS_SEG)) : 0;
-  // Un trozo de Demucs cuesta ~3 de MDX-Net (medido): así el tiempo restante sale parejo.
-  const order: Stem[] = sep.demucs ? ["drums"] : ["vocals", "drums", "bass"];
-  const totalUnits = demChunks * 3 + order.length * mdxChunks;
+  const demChunks = sep.demucs ? Math.ceil(L.length / Math.floor((1 - overlap) * seg)) : 0;
+  // Con Demucs, la batería sale de MDX-Net salvo en «Fiel (rápida)». Sin Demucs: los modelos que vinieron.
+  const order: Stem[] = sep.demucs ? (fast ? [] : ["drums"]) : (["vocals", "drums", "bass"] as Stem[]).filter((k) => sep[k]);
+  // Un trozo de Demucs cuesta ~3 de MDX-Net (7,8 s) o ~1,5 (3,9 s): así el tiempo restante sale parejo.
+  const dw = seg >= DEMUCS_SEG ? 3 : 1.5;
+  const totalUnits = demChunks * dw + order.length * mdxChunks;
   let units = 0, ep = "wasm";
   const tick = (what: string, c: number, total: number, u: number) => {
     units += u;
@@ -133,15 +138,19 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
   const out = {} as Separated;
   if (sep.demucs) {
     post({ type: "progress", pct: 2, msg: "Preparando la separación en 6 fuentes… (el primer trozo tarda más)" });
-    const w = f16to32(sep.demucs.weights);
+    let w: Float32Array | null = f16to32(sep.demucs.weights!);
+    sep.demucs.weights = null; // memoria: los pesos ya están en float32
     const { s, ep: e } = await session(sep.demucs.graph, gpu, { externalData: [{ path: "htdemucs_6s.data", data: new Uint8Array(w.buffer) }] });
+    w = null; // ONNX Runtime ya copió los pesos
     ep = e;
+    const want = (fast ? ["drums", "bass", "other", "vocals", "guitar", "piano"] : ["bass", "other", "vocals", "guitar", "piano"]) as ("drums" | "bass" | "other" | "vocals" | "guitar" | "piano")[];
     const r = await separateDemucs(L, R, async (mix, spec) => {
-      const o = await s.run({ mix: new ort.Tensor("float32", mix, [1, 2, DEMUCS_SEG]), spec: new ort.Tensor("float32", spec, [1, 4, 2048, 336]) });
+      const o = await s.run({ mix: new ort.Tensor("float32", mix, [1, 2, seg]), spec: new ort.Tensor("float32", spec, [1, 4, 2048, Math.ceil(seg / 1024)]) });
       return { freq: o.freq.data as Float32Array, time: o.time.data as Float32Array };
-    }, ["bass", "other", "vocals", "guitar", "piano"], (c, total) => tick(names.demucs, c, total, 3));
+    }, want, (c, total) => tick(names.demucs, c, total, dw), { seg, overlap });
     await s.release();
     out.vocals = r.vocals!; out.bass = r.bass!; out.other = r.other!; out.guitar = r.guitar!; out.piano = r.piano!;
+    if (r.drums) out.drums = r.drums;
   }
   const oL = L.slice(), oR = R.slice();
   for (const stem of order) {
@@ -158,11 +167,14 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
     out[stem] = y;
     if (!sep.demucs) for (let i = 0; i < oL.length; i++) { oL[i] -= y[0][i]; oR[i] -= y[1][i]; }
   }
+  if (!sep.demucs && !out.vocals) out.vocals = [new Float32Array(L.length), new Float32Array(L.length)];
   if (!sep.demucs) out.other = [oL, oR];
   return { stems: out, ep };
 }
 
-self.onmessage = async (e: MessageEvent<WorkerIn>) => {
+// Con varios núcleos, ONNX Runtime arranca sus hilos cargando este mismo archivo con el nombre «em-pthread»:
+// en ese caso el motor ya instaló su propio receptor de mensajes y no hay que pisarlo.
+if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
     const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems } = e.data;

@@ -21,6 +21,18 @@ import { adaptForAlphaTab } from "../scripts/sfadapt.mjs";
 import { attachPinch, ZOOM_MAX, ZOOM_MIN } from "./ui/pinch";
 import { buildKeypad } from "./ui/keypad";
 
+// Service worker: da a la página el aislamiento que necesita la memoria compartida (la separación de
+// pistas usa varios núcleos) y guarda la app para abrirla sin internet. La primera vez que toma control,
+// la página se recarga una sola vez para quedar aislada.
+if (!ARTIFACT && "serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch(() => { /* sin service worker: un solo núcleo */ });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (self.crossOriginIsolated) return;
+    try { if (sessionStorage.getItem("mf:coi")) return; sessionStorage.setItem("mf:coi", "1"); } catch { return; }
+    location.reload();
+  });
+}
+
 const DUR_GLYPH: Record<number, string> = { 1: "𝅝", 2: "𝅗𝅥", 4: "♩", 8: "♪", 16: "𝅘𝅥𝅯", 32: "𝅘𝅥𝅰", 64: "𝅘𝅥𝅱" };
 const DYN = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff"];
 const PREFS = (() => { try { return JSON.parse(localStorage.getItem("mf:prefs") || "{}"); } catch { return {}; } })();

@@ -13,24 +13,46 @@ export const SEP_PACKS = {
 };
 export const SEP_MB = Object.values(SEP_PACKS).reduce((s, p) => s + p.mb, 0);
 
-// Demucs v4 de 6 fuentes (guitarra y piano aparte). Con él solo hace falta, además, la batería de MDX-Net
-// (que lee mejor bombo, caja y hi-hat).
+// Demucs v4 de 6 fuentes (guitarra y piano aparte), con trozos de 3,9 s: la mitad de memoria que los
+// originales de 7,8 s (~1,6 GB contra ~2,9 GB en el pico) y ~25 % más rápido, con la misma fidelidad en las
+// partituras de Brayand (reparto 67 contra 68 %, bajo 63–67 contra 65 %, dentro del ruido de la medición).
 const NOTE6 = "Separación en 6 fuentes (guitarra y piano aparte) para transcribir con más fidelidad.";
 export const DEMUCS_PACKS = {
-  graph: { id: "demucs6-graph", name: "Demucs 6 fuentes (red)", mb: 4.9, rev: 1, files: parts("demucs/graph", 1), note: NOTE6 } as Pack,
+  graph39: { id: "demucs6-graph39", name: "Demucs 6 fuentes (red)", mb: 2.8, rev: 1, files: parts("demucs/graph39", 1), note: NOTE6 } as Pack,
   weights: { id: "demucs6-weights", name: "Demucs 6 fuentes (pesos)", mb: 54.8, rev: 1, files: parts("demucs/weights", 4), note: NOTE6 } as Pack,
 };
 /** Tamaño exacto de los pesos (27 414 552 en float16). */
 export const DEMUCS_WEIGHT_BYTES = 54829104;
-export const SEP6_MB = SEP_PACKS.ort.mb + SEP_PACKS.drums.mb + DEMUCS_PACKS.graph.mb + DEMUCS_PACKS.weights.mb;
+export const DEMUCS_SEG_APP = 171990;
+
+export interface SepPlan {
+  engine: "demucs" | "mdx";
+  /** Muestras por trozo de Demucs. */
+  seg: number;
+  /** «Fiel (rápida)»: sin el modelo extra de batería (Demucs) o sin el de voz (MDX-Net), menos solape. */
+  fast: boolean;
+  packs: [string, Pack][];
+  mb: number;
+  label: string;
+}
+
+const isPhone = () => /Android|iPhone|iPad|Mobile/i.test((typeof navigator !== "undefined" && navigator.userAgent) || "");
 
 /**
- * ¿Le alcanza la memoria al dispositivo para Demucs? Necesita ~2,8 GB en el pico (el doble que MDX-Net).
- * Chrome informa la memoria del equipo (redondeada, máximo 8); si no la informa, se usa solo en
- * computadoras.
+ * Qué separación usa este equipo (medido: Demucs con trozos de 3,9 s ~1,6 GB en el pico; MDX-Net ~1,4 GB). Chrome informa la memoria del equipo (redondeada, máximo 8). Si Demucs ya falló en
+ * este equipo (`noDemucs`), se usa MDX-Net.
  */
-export function canUseDemucs(): boolean {
-  const nav = (typeof navigator !== "undefined" ? navigator : {}) as { deviceMemory?: number; userAgent?: string };
-  if (typeof nav.deviceMemory === "number") return nav.deviceMemory >= 6;
-  return !/Android|iPhone|iPad|Mobile/i.test(nav.userAgent ?? "");
+export function sepPlan(fast: boolean, noDemucs = false, wantsVocals = true): SepPlan {
+  const mem = (typeof navigator !== "undefined" ? (navigator as { deviceMemory?: number }).deviceMemory : undefined);
+  const phone = isPhone();
+  const demucs = !noDemucs && (phone ? (mem ?? 4) >= 6 : (mem ?? 8) >= 4);
+  if (demucs) {
+    const packs: [string, Pack][] = [["ort", SEP_PACKS.ort], ["graph", DEMUCS_PACKS.graph39], ["weights", DEMUCS_PACKS.weights], ...(fast ? [] : [["drums", SEP_PACKS.drums] as [string, Pack]])];
+    return { engine: "demucs", seg: DEMUCS_SEG_APP, fast, packs, mb: packs.reduce((x, [, p]) => x + p.mb, 0), label: fast ? "Demucs en 6 fuentes" : "Demucs en 6 fuentes y MDX-Net para la batería" };
+  }
+  const packs: [string, Pack][] = [["ort", SEP_PACKS.ort], ...(fast && !wantsVocals ? [] : [["vocals", SEP_PACKS.vocals] as [string, Pack]]), ["drums", SEP_PACKS.drums], ["bass", SEP_PACKS.bass]];
+  return { engine: "mdx", seg: 0, fast, packs, mb: packs.reduce((x, [, p]) => x + p.mb, 0), label: "MDX-Net (voz, batería y bajo)" };
 }
+
+/** Núcleos para la separación: todos menos uno (para que la pantalla siga fluida), entre 1 y 6. */
+export const threadsFor = (hc?: number) => { const n = hc || 2; return n <= 2 ? n : Math.min(6, n - 1); };

@@ -5,7 +5,7 @@
 #
 #   python scripts/export-demucs.py <checkpoint 5c90dfd2-34c22ccb.th> <carpeta de salida>
 #
-# Salida: htdemucs_6s.graph.onnx (la red, ~5 MB) y htdemucs_6s.f16 (pesos en float16, ~55 MB: los mismos
+# Salida: htdemucs_6s.graph.onnx (la red, ~5 MB), htdemucs_6s.graph39.onnx (trozos de 3,9 s) y htdemucs_6s.f16 (pesos en float16, ~55 MB: los mismos
 # del checkpoint, que ya viene en float16). La app convierte los pesos a float32 al cargarlos.
 import hashlib, os
 import sys, math, fractions, torch
@@ -14,7 +14,8 @@ import demucs.htdemucs as H
 from einops import rearrange
 
 torch.serialization.add_safe_globals([fractions.Fraction, H.HTDemucs])
-if not hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest().startswith("34c22ccb"):
+# El oficial se comprueba por su huella; uno afinado por nosotros (scripts/train) se acepta tal cual.
+if os.path.basename(sys.argv[1]).startswith("5c90dfd2") and not hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest().startswith("34c22ccb"):
     sys.exit("El checkpoint no es el oficial (sha256 distinto).")
 pkg = torch.load(sys.argv[1], map_location="cpu", weights_only=True)
 model = H.HTDemucs(*pkg["args"], **pkg["kwargs"])
@@ -81,7 +82,7 @@ def core(self, mix, x):
     S = len(self.sources)
     x = x.view(B, S, -1, Fq, T)
     x = x * std[:, None] + mean[:, None]
-    xt = xt.view(B, S, -1, L)
+    xt = xt.view(B, S, -1, mix.shape[-1])
     xt = xt * stdt[:, None] + meant[:, None]
     return x, xt
 
@@ -116,22 +117,29 @@ if __name__ == "__main__":
         diff = float((model._ispec(z, L) + xt - ref).abs().max())
     print("diferencia con el original", diff)
     assert diff < 1e-4
-    full = os.path.join(out, "full.onnx")
-    torch.onnx.export(Core(model), (w, mag), full, export_params=True, opset_version=17, do_constant_folding=True,
-                      input_names=["mix", "spec"], output_names=["freq", "time"], dynamo=False)
-    m = onnx.load(full)
-    offset, f16 = 0, []
-    for t in m.graph.initializer:
-        if t.data_type != onnx.TensorProto.FLOAT or np.prod(t.dims) < 16:
-            continue
-        a = numpy_helper.to_array(t).astype(np.float32)
-        t.ClearField("raw_data"); t.ClearField("float_data")
-        t.data_location = onnx.TensorProto.EXTERNAL
-        del t.external_data[:]
-        for k, v in (("location", "htdemucs_6s.data"), ("offset", str(offset * 4)), ("length", str(a.size * 4))):
-            e = t.external_data.add(); e.key = k; e.value = v
-        f16.append(a.astype(np.float16).ravel()); offset += a.size
-    onnx.save(m, os.path.join(out, "htdemucs_6s.graph.onnx"))
-    np.concatenate(f16).tofile(os.path.join(out, "htdemucs_6s.f16"))
-    os.remove(full)
+    # Dos redes con los mismos pesos: trozos de 7,8 s (la original) y de 3,9 s (la mitad de memoria, para
+    # teléfonos). Se comparten los pesos (mismo orden de inicializadores).
+    for seg, name in ((L, "graph"), (L // 2, "graph39")):
+        full = os.path.join(out, "full.onnx")
+        w = torch.randn(1, 2, seg)
+        torch.onnx.export(Core(model), (w, spec(w)), full, export_params=True, opset_version=17, do_constant_folding=True,
+                          input_names=["mix", "spec"], output_names=["freq", "time"], dynamo=False)
+        m = onnx.load(full)
+        offset, f16 = 0, []
+        for t in m.graph.initializer:
+            if t.data_type != onnx.TensorProto.FLOAT or np.prod(t.dims) < 16:
+                continue
+            a = numpy_helper.to_array(t).astype(np.float32)
+            t.ClearField("raw_data"); t.ClearField("float_data")
+            t.data_location = onnx.TensorProto.EXTERNAL
+            del t.external_data[:]
+            for k, v in (("location", "htdemucs_6s.data"), ("offset", str(offset * 4)), ("length", str(a.size * 4))):
+                e = t.external_data.add(); e.key = k; e.value = v
+            f16.append(a.astype(np.float16).ravel()); offset += a.size
+        onnx.save(m, os.path.join(out, f"htdemucs_6s.{name}.onnx"))
+        w16 = np.concatenate(f16)
+        path = os.path.join(out, "htdemucs_6s.f16")
+        if name == "graph": w16.tofile(path)
+        else: assert np.array_equal(np.fromfile(path, dtype=np.float16), w16), "los pesos de las dos redes deben coincidir"
+        os.remove(full)
     print("listo:", out)

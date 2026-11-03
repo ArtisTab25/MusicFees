@@ -9,7 +9,7 @@ import { CHORDS, voicings } from "../score/chords";
 import { TUNINGS } from "../score/instruments";
 import { ARTIFACT } from "../config";
 import { downloadPack, hasPack } from "../player/downloads";
-import { canUseDemucs, DEMUCS_PACKS, DEMUCS_WEIGHT_BYTES, SEP6_MB, SEP_MB, SEP_PACKS } from "./packs";
+import { DEMUCS_WEIGHT_BYTES, sepPlan, threadsFor } from "./packs";
 import type { Pack } from "../player/downloads";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
 import { analyzeScore } from "./symbolic";
@@ -113,23 +113,24 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     [...modeBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String((i === 0) === (m === "mix"))));
     soloField.hidden = m === "mix"; drumsRow.hidden = m === "solo";
   }
-  // Calidad: «Fiel» separa la mezcla antes de transcribir (modelos de ~110 MB que se bajan una vez).
-  let faithful = c.prefs.trFaithful !== false;
-  const qBtns = h("div", { class: "menu-tabs", role: "group", "aria-label": "Calidad" },
-    h("button", { "aria-pressed": faithful, onclick: () => setQ(true) }, "Fiel"),
-    h("button", { "aria-pressed": !faithful, onclick: () => setQ(false) }, "Rápida"));
+  // Calidad: «Fiel» separa la mezcla antes de transcribir; «Fiel (rápida)» separa con menos modelos y
+  // menos solape (~40 % menos tiempo); «Rápida» transcribe la mezcla tal cual.
+  type Quality = "fiel" | "fielRapida" | "rapida";
+  let quality: Quality = (c.prefs.trQuality as Quality | undefined) ?? (c.prefs.trFaithful === false ? "rapida" : "fiel");
+  const Q: [Quality, string][] = [["fiel", "Fiel"], ["fielRapida", "Fiel (rápida)"], ["rapida", "Rápida"]];
+  const qBtns = h("div", { class: "menu-tabs", role: "group", "aria-label": "Calidad" }, Q.map(([k, l]) => h("button", { "aria-pressed": quality === k, onclick: () => setQ(k) }, l)));
   const qNote = h("p", { class: "note" });
+  const plan = () => sepPlan(quality === "fielRapida", !!c.prefs.noDemucs, readHint().vocals !== false);
   const drawQ = async () => {
-    const six = canUseDemucs();
-    const packs = six ? [SEP_PACKS.ort, SEP_PACKS.drums, DEMUCS_PACKS.graph, DEMUCS_PACKS.weights] : Object.values(SEP_PACKS);
-    const have = (await Promise.all(packs.map((p) => hasPack(p)))).every(Boolean);
-    qNote.textContent = faithful
-      ? `${six ? "Separa la mezcla en 6 fuentes (voz, batería, bajo, guitarra, piano y lo demás) con Demucs y MDX-Net" : "Separa voz, batería, bajo y lo demás con modelos de separación (MDX-Net; este equipo tiene poca memoria para la separación en 6 fuentes)"} y transcribe cada una por separado. ${have ? "Modelos ya descargados." : `Descarga ${Math.round(six ? SEP6_MB : SEP_MB)} MB una sola vez.`} Tarda bastante más: en el teléfono usa un fragmento de 30–60 s.`
-      : "Transcribe la mezcla tal cual. Mucho más rápida, menos fiel cuando suenan varios instrumentos.";
+    if (quality === "rapida") { qNote.textContent = "Transcribe la mezcla tal cual. Mucho más rápida, menos fiel cuando suenan varios instrumentos."; return; }
+    const pl = plan();
+    const have = (await Promise.all(pl.packs.map(([, p]) => hasPack(p)))).every(Boolean);
+    const cores = self.crossOriginIsolated ? threadsFor(navigator.hardwareConcurrency) : 1;
+    qNote.textContent = `Separa la mezcla con ${pl.label} y transcribe cada fuente por separado.${quality === "fielRapida" ? (pl.engine === "demucs" ? " La batería sale de Demucs (lee un poco peor el hi-hat y la caja)." : " Sin el modelo de voz si dices que no hay voz.") : ""} ${have ? "Modelos ya descargados." : `Descarga ${Math.round(pl.mb)} MB una sola vez.`} Usa ${cores} ${cores === 1 ? "núcleo" : "núcleos"} del procesador. En el teléfono, mejor un fragmento de 30–60 s.`;
   };
-  function setQ(on: boolean) {
-    faithful = on; c.prefs.trFaithful = on; c.savePrefs();
-    [...qBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String((i === 0) === on)));
+  function setQ(k: Quality) {
+    quality = k; c.prefs.trQuality = k; c.prefs.trFaithful = k !== "rapida"; c.savePrefs();
+    [...qBtns.children].forEach((b, i) => b.setAttribute("aria-pressed", String(Q[i][0] === k)));
     void drawQ();
   }
   void drawQ();
@@ -145,14 +146,14 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     const len = pcm[0].length / SR;
     const a = Math.max(0, Number(from.value) || 0), b = Math.min(len, Math.max(a + 2, Number(to.value) || len), a + MAX_SECONDS);
     const L = pcm[0].slice(Math.floor(a * SR), Math.floor(b * SR)), R = pcm[1].slice(Math.floor(a * SR), Math.floor(b * SR));
-    const useSep = faithful && mode === "mix";
+    const useSep = quality !== "rapida" && mode === "mix";
     const opts: TranscribeOpts = { mode, separate: useSep, presets: mode === "solo" ? { all: soloSel.value } : {}, drums: mode === "mix" && drums.checked, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: title.value.trim() || name || "Transcripción" };
     busy(true);
     status.textContent = "Preparando…";
     // Modo fiel: los modelos se bajan una vez (con avance) y se pasan al proceso de fondo.
     let sep: WorkerIn["sep"];
     if (useSep) {
-      // Con memoria suficiente: Demucs (6 fuentes) + batería de MDX-Net; si no, los tres modelos MDX-Net.
+      // Según el equipo: Demucs (6 fuentes; trozos cortos en teléfonos) o los modelos MDX-Net.
       const fetchAll = async (packs: [string, Pack][], total: number) => {
         const got: Record<string, ArrayBuffer> = {};
         let doneMb = 0;
@@ -164,37 +165,50 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
         return got;
       };
       try {
-        let got: Record<string, ArrayBuffer> | null = null;
-        if (canUseDemucs()) {
+        let pl = plan(), got: Record<string, ArrayBuffer> | null = null;
+        if (pl.engine === "demucs") {
           try {
-            got = await fetchAll([["ort", SEP_PACKS.ort], ["drums", SEP_PACKS.drums], ["graph", DEMUCS_PACKS.graph], ["weights", DEMUCS_PACKS.weights]], SEP6_MB);
+            got = await fetchAll(pl.packs, pl.mb);
             if (got.weights.byteLength !== DEMUCS_WEIGHT_BYTES) got = null; // un servidor que responde otra cosa
-          }
-          catch { got = null; } // esta copia de la app no trae Demucs: se usan los modelos MDX-Net
+          } catch { got = null; } // esta copia de la app no trae Demucs: se usan los modelos MDX-Net
+          if (!got) pl = sepPlan(pl.fast, true, readHint().vocals !== false);
         }
-        if (got) sep = { ort: got.ort, drums: got.drums, demucs: { graph: got.graph, weights: got.weights } };
-        else {
-          const g = await fetchAll([["ort", SEP_PACKS.ort], ["vocals", SEP_PACKS.vocals], ["drums", SEP_PACKS.drums], ["bass", SEP_PACKS.bass]], SEP_MB);
-          sep = { ort: g.ort, drums: g.drums, vocals: g.vocals, bass: g.bass };
-        }
+        if (!got) got = await fetchAll(pl.packs, pl.mb);
+        sep = pl.engine === "demucs"
+          ? { ort: got.ort, drums: got.drums, demucs: { graph: got.graph, weights: got.weights, seg: pl.seg }, fast: pl.fast }
+          : { ort: got.ort, drums: got.drums, vocals: got.vocals, bass: got.bass, fast: pl.fast };
       } catch (e) { busy(false); status.textContent = `${(e as Error).message} Puedes usar la calidad «Rápida» mientras tanto.`; return; }
     }
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
     const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, hint: mode === "mix" ? readHint() : undefined };
-    launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])], opts);
+    launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])], opts, sep?.demucs ? () => {
+      // Demucs no avanzó (memoria del teléfono): se recuerda y se repite con MDX-Net.
+      c.prefs.noDemucs = true; c.savePrefs(); void drawQ();
+      status.textContent = "Este equipo no pudo con la separación en 6 fuentes (memoria). Sigo con la de 3 modelos…";
+      void run();
+    } : undefined);
   }
   const modelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
-  function launch(msg: WorkerIn, transfer: Transferable[], opts: TranscribeOpts) {
+  let watch = 0;
+  function launch(msg: WorkerIn, transfer: Transferable[], opts: TranscribeOpts, onStall?: () => void) {
     worker?.terminate();
+    clearInterval(watch);
     worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+    // Vigía: si la separación deja de avanzar 3 minutos (el teléfono mató el proceso por memoria, sin
+    // avisar), se corta y se reintenta con algo más ligero.
+    let last = Date.now(), separating = true;
+    const stall = () => { clearInterval(watch); worker?.terminate(); worker = null; if (onStall) onStall(); else { busy(false); status.textContent = "La separación dejó de avanzar (probablemente por memoria). Prueba un fragmento más corto o la calidad «Rápida»."; } };
+    watch = window.setInterval(() => { if (worker && separating && Date.now() - last > 180_000) stall(); }, 5000);
     worker.onmessage = (e: MessageEvent<WorkerOut>) => {
       const m = e.data;
-      if (m.type === "progress") { bar.value = m.pct; status.textContent = m.msg; }
+      last = Date.now();
+      if (m.type !== "progress") clearInterval(watch);
+      if (m.type === "progress") { bar.value = m.pct; status.textContent = m.msg; if (m.pct >= 60) separating = false; }
       else if (m.type === "error") { busy(false); worker?.terminate(); worker = null; status.textContent = `No se pudo transcribir: ${m.message}`; }
       else { busy(false); worker?.terminate(); worker = null; const mins = m.ms / 60000; result(sheets, c, m.analysis, opts, `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("pistas") ? "pistas separadas por ti" : m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
     };
-    worker.onerror = (e) => { busy(false); status.textContent = `No se pudo transcribir: ${e.message || "error del proceso"}`; };
+    worker.onerror = (e) => { clearInterval(watch); if (onStall && separating) { stall(); return; } busy(false); status.textContent = `No se pudo transcribir: ${e.message || "error del proceso"}`; };
     worker.postMessage(msg, transfer);
   }
   // Pistas ya separadas en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…): no se separa
@@ -278,7 +292,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       h("p", { class: "note" }, "Más sensibilidad encuentra notas suaves pero también ruido; menos deja solo las notas claras."),
       h("label", { class: "inline", for: "tr-mark" }, mark, "Marcar con 💬 los compases dudosos para revisarlos")),
     h("div", { class: "inline" }, go, cancel), bar,
-    h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en equipos con poca memoria, MDX-Net separa voz, batería y bajo); un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
+    h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en trozos de 3,9 s para gastar poca memoria; en equipos con poca memoria, o si la separación se atasca, MDX-Net separa voz, batería y bajo). «Fiel (rápida)» usa la misma separación con menos solapamiento entre trozos y sin el segundo separador de batería. Con varios núcleos y sin internet: tras la primera descarga, todo funciona fuera de línea; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes las pistas separadas?"),
       h("p", { class: "note" }, "Si separaste la canción en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…), sube aquí sus pistas: voz, batería, bajo, guitarra, piano, lo demás. MusicFees transcribe cada una con su instrumento, sin volver a separar. Usa la indicación de instrumentos de arriba para decir cuántas guitarras o teclados hay."),
       stemIn, stemList, stemGo),

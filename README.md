@@ -47,6 +47,14 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.5: separación más rápida, varios núcleos, sin internet y kit para entrenar
+
+- **Ya no se queda en «Preparando la separación en 6 fuentes»**: Demucs separa en trozos de 3,9 s (antes 7,8 s), que gastan la mitad de memoria (≈1,6 GB en vez de 2,9 GB) con la misma calidad medida en las partituras de Brayand. Los teléfonos usan Demucs solo si declaran 6 GB de memoria o más; si la separación deja de avanzar 3 minutos, la app cambia sola a MDX-Net y lo recuerda.
+- **Varios núcleos**: un service worker activa el aislamiento del navegador (COOP/COEP), que permite que el separador use hasta 6 núcleos (todos menos uno). Medido en esta computadora de 2 núcleos con 24 s de audio: Fiel 202 s con 1 núcleo → 133 s con 2.
+- **Fiel (rápida)**: la misma separación en 6 fuentes con menos solapamiento entre trozos y la batería de Demucs (sin el segundo separador): 76 s para los mismos 24 s, 29 MB menos de descarga. Lee un poco peor el hi-hat y la caja.
+- **Sin internet**: tras la primera visita y la primera descarga de modelos, la app abre y transcribe fuera de línea.
+- **Kit para entrenar el separador con Slakh2100** (CC BY 4.0) en Kaggle gratis: `scripts/train/` (ver su README). Probado solo con datos de prueba; los pesos actuales siguen siendo los originales de Demucs hasta que unos entrenados demuestren mejora con partituras reales.
+
 ## Versión 1.3.4: dile qué instrumentos hay, usa pistas ya separadas y cambia cualquier pista de instrumento
 
 - **Qué instrumentos tiene la grabación** (Transcribir audio, opcional): voz, batería y bajo (sí/no), cuántas guitarras (0–3), teclados (0–2) y vientos, cuerdas o sinte con melodía (0–3). No se inventan partes que no existen y las notas se reparten entre las pistas indicadas: con 2 guitarras sale «Guitarra 1 (ritmo)» y «Guitarra 2 (punteo)»; con 3, el ritmo se divide en grave y agudo. Medido con las partituras de Brayand (indicación tomada de cada .gp): notas en la pista correcta 77 → 80 % y, en fragmentos no vistos, 68 → 75 %.
