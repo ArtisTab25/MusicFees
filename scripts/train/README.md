@@ -15,7 +15,7 @@ de verdad necesita una tarjeta gráfica.
 ```bash
 !git clone --depth 1 https://github.com/ArtisTab25/MusicFees
 %cd MusicFees
-!pip install -q demucs soundfile pyyaml
+!pip install -q demucs soundfile pyyaml onnx einops
 # Checkpoint oficial de Demucs 6 fuentes (el script comprueba su huella sha256)
 !curl -sSL -o 5c90dfd2-34c22ccb.th https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/5c90dfd2-34c22ccb.th
 # Parte de Slakh2100 sin bajar los 104 GB: ~300 canciones de entrenamiento (~15 GB)
