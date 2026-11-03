@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.3: separación en 6 fuentes (guitarra y piano aparte)
+
+- **Modo «Fiel» con Demucs v4** (`htdemucs_6s`, Meta, MIT): voz, bajo, guitarra, piano y lo demás salen de Demucs; la batería, del modelo MDX-Net (lee mejor bombo, caja y hi-hat). Las notas de guitarra salen de la pista de guitarra y las de teclado de la de piano, en vez de adivinarse por timbre; de «lo demás» queda la línea principal (vientos, cuerdas, sinte).
+- Medido con las partituras de Brayand (promedio de 9 canciones; en paréntesis, fragmentos que no se usaron para ajustar): notas en la pista del instrumento correcto 66 → 77 % (64 → 68 %), bajo 69 → 71 % (62 → 65 %); batería igual; notas de guitarras y teclados encimados igual (~30–35 %).
+- La red se exporta a ONNX sin la STFT (`scripts/export-demucs.py`, desde el paquete oficial de PyPI y el checkpoint oficial comprobado por su huella); la STFT, la ISTFT y los trozos con solape están en `src/transcribe/demucs.ts` (igual a PyTorch: 60 dB). Los pesos se bajan en float16 (55 MB, los mismos del checkpoint) y se pasan a float32 en el dispositivo. GitHub Actions lo exporta antes de compilar.
+- Descarga: ~109 MB una vez (antes ~106). Necesita ~2,8 GB de memoria en el pico (el doble que MDX-Net): se usa en computadoras y en teléfonos que informan 6 GB o más; en los demás sigue la separación con los tres modelos MDX-Net. Es ~20 % más lenta.
+
 ## Versión 1.3.2: importar MIDI (mitad en la computadora, mitad en la app)
 
 - **Transcribir audio → «¿Ya tienes un MIDI?»**: importa un .mid hecho en otro lado — por ejemplo con [NeuralNote](https://github.com/DamRsn/NeuralNote) v2 en tu computadora, que es gratis y usa MuScriptor, el modelo abierto de transcripción más preciso hoy (pesos CC BY-NC 4.0: uso no comercial, en tu equipo). MusicFees pone cada pista del MIDI con su instrumento (por su programa General MIDI y su nombre), en tablatura con la digitación más cómoda, con tonalidad, acordes, secciones y análisis. Si el MIDI no trae un tempo que coincida con las notas (lo normal al transcribir sin cuantizar), el pulso se calcula con los ataques; si lo trae, se respeta también su compás (3/4, 6/8).

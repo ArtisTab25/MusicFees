@@ -51,6 +51,14 @@ else {
     const parts = split(bytes, join(OUT, "mdx", stem));
     log(`${stem}: ${parts} partes · sha256 ${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}`);
   }
+  // Demucs v4 de 6 fuentes (MIT): lo exporta scripts/export-demucs.py a .cache/demucs (GitHub Actions lo
+  // corre antes de compilar). La red y los pesos en float16 se parten igual que los demás.
+  const DEM = join(ROOT, ".cache", "demucs");
+  const graph = join(DEM, "htdemucs_6s.graph.onnx"), w16 = join(DEM, "htdemucs_6s.f16");
+  if (existsSync(graph) && existsSync(w16)) {
+    const g = readFileSync(graph), w = readFileSync(w16);
+    log(`Demucs 6 fuentes: red ${split(g, join(OUT, "demucs", "graph"))} parte(s), pesos ${split(w, join(OUT, "demucs", "weights"))} partes · sha256 ${createHash("sha256").update(w).digest("hex").slice(0, 12)}`);
+  } else log("Sin Demucs 6 fuentes (corre scripts/export-demucs.py): el modo Fiel usará los tres modelos MDX-Net.");
   const wasm = join(ROOT, "node_modules", "onnxruntime-web", "dist", "ort-wasm-simd-threaded.jsep.wasm");
   if (existsSync(wasm)) log(`ONNX Runtime Web: ${split(readFileSync(wasm), join(OUT, "ort"))} partes.`);
   else log("Falta onnxruntime-web (corre npm install).");

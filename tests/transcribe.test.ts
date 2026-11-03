@@ -278,3 +278,23 @@ test("MIDI: lee pistas, programa, tempo y compás, y arma una parte por pista", 
   assert.equal(a.key.name, "Do mayor");
   assert.ok(a.chords.some((c) => c.name === "C") && a.chords.some((c) => c.name === "G"));
 });
+
+test("Demucs: STFT, ISTFT y trozos con solape reconstruyen la mezcla (red identidad)", async () => {
+  const { separateDemucs, DEMUCS_SEG } = await import("../src/transcribe/demucs");
+  const sr = 44100, n = Math.floor(sr * 12.3), L = new Float32Array(n), R = new Float32Array(n);
+  for (let i = 0; i < n; i++) { L[i] = 0.3 * Math.sin((2 * Math.PI * 220 * i) / sr) + 0.1 * Math.sin((2 * Math.PI * 1234 * i) / sr) + 0.05; R[i] = 0.25 * Math.sin((2 * Math.PI * 330 * i) / sr); }
+  let calls = 0;
+  const res = await separateDemucs(L, R, async (mix, spec) => {
+    calls++;
+    assert.equal(mix.length, 2 * DEMUCS_SEG);
+    const freq = new Float32Array(6 * spec.length);
+    for (let s = 0; s < 6; s++) freq.set(spec, s * spec.length);
+    return { freq, time: new Float32Array(6 * 2 * DEMUCS_SEG) };
+  }, ["bass"]);
+  assert.equal(calls, 3);
+  const [yl, yr] = res.bass!;
+  let num = 0, den = 0;
+  // Igual que en Demucs, los primeros y últimos ~35 ms de la pista quedan atenuados (bordes de la STFT).
+  for (let i = 4096; i < n - 4096; i++) { num += L[i] * L[i] + R[i] * R[i]; den += (L[i] - yl[i]) ** 2 + (R[i] - yr[i]) ** 2; }
+  assert.ok(10 * Math.log10(num / den) > 60, `SDR ${10 * Math.log10(num / den)}`);
+});

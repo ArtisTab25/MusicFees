@@ -14,3 +14,4 @@ public/wam/community
 # Se generan al compilar (scripts/models.mjs)
 public/models/mdx
 public/models/ort
+public/models/demucs

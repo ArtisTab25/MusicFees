@@ -113,6 +113,7 @@ export function analyzeNotes(input: {
       const G = [...(gtr6 ?? []), ...(SIX_OPTS.leftover ? L.guitar : [])], K = [...(keys6 ?? []), ...(SIX_OPTS.leftover ? L.keys : [])];
       const gt = stems.guitarTimbre && stems.guitar && stems.guitarTimbre.length === stems.guitar.length ? alignTimbre(stems.guitar, gtr6 ?? [], stems.guitarTimbre) : [];
       const bright = gt.length ? gt.reduce((x, t) => x + t.bright, 0) / gt.length : 0.4;
+      // Con la guitarra ya aparte, la línea principal de «lo demás» suele ser viento, cuerda o sinte (medido).
       if (L.lead.length) parts.push({ role: "melody", notes: L.lead, hint: L.hints.lead === "gtr_clean" ? "lead_saw" : L.hints.lead });
       if (G.length) parts.push({ role: "guitar", notes: cleanHarmony(G, chords, beats, !!bassLine.length), hint: bright > 0.9 ? "gtr_dist" : bright > 0.55 ? "gtr_od" : "gtr_clean" });
       if (K.length) parts.push({ role: "keys", notes: cleanHarmony(K, chords, beats, !!bassLine.length), hint: L.hints.keys });

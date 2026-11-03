@@ -31,6 +31,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Demucs v4 de 6 fuentes (MIT) en ONNX para el modo Fiel: checkpoint oficial (huella comprobada en
+      # el script) y exportación con el paquete oficial de PyPI.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Exportar Demucs 6 fuentes
+        run: |
+          mkdir -p .cache/demucs
+          curl -sSL -o .cache/demucs/5c90dfd2-34c22ccb.th https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/5c90dfd2-34c22ccb.th
+          pip install --quiet torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet demucs onnx einops
+          python scripts/export-demucs.py .cache/demucs/5c90dfd2-34c22ccb.th .cache/demucs
       - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

@@ -9,7 +9,8 @@ import { CHORDS, voicings } from "../score/chords";
 import { TUNINGS } from "../score/instruments";
 import { ARTIFACT } from "../config";
 import { downloadPack, hasPack } from "../player/downloads";
-import { SEP_MB, SEP_PACKS } from "./packs";
+import { canUseDemucs, DEMUCS_PACKS, DEMUCS_WEIGHT_BYTES, SEP6_MB, SEP_MB, SEP_PACKS } from "./packs";
+import type { Pack } from "../player/downloads";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
 import { analyzeScore } from "./symbolic";
 import type { Analysis, Role, TranscribeOpts } from "./types";
@@ -105,9 +106,11 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("button", { "aria-pressed": !faithful, onclick: () => setQ(false) }, "Rápida"));
   const qNote = h("p", { class: "note" });
   const drawQ = async () => {
-    const have = (await Promise.all(Object.values(SEP_PACKS).map((p) => hasPack(p)))).every(Boolean);
+    const six = canUseDemucs();
+    const packs = six ? [SEP_PACKS.ort, SEP_PACKS.drums, DEMUCS_PACKS.graph, DEMUCS_PACKS.weights] : Object.values(SEP_PACKS);
+    const have = (await Promise.all(packs.map((p) => hasPack(p)))).every(Boolean);
     qNote.textContent = faithful
-      ? `Separa voz, batería, bajo y lo demás con modelos de separación (MDX-Net) y transcribe cada uno por separado: reconoce la voz, guitarras y teclados, toms y platillos. ${have ? "Modelos ya descargados." : `Descarga ${Math.round(SEP_MB)} MB una sola vez.`} Tarda bastante más: en el teléfono usa un fragmento de 30–60 s.`
+      ? `${six ? "Separa la mezcla en 6 fuentes (voz, batería, bajo, guitarra, piano y lo demás) con Demucs y MDX-Net" : "Separa voz, batería, bajo y lo demás con modelos de separación (MDX-Net; este equipo tiene poca memoria para la separación en 6 fuentes)"} y transcribe cada una por separado. ${have ? "Modelos ya descargados." : `Descarga ${Math.round(six ? SEP6_MB : SEP_MB)} MB una sola vez.`} Tarda bastante más: en el teléfono usa un fragmento de 30–60 s.`
       : "Transcribe la mezcla tal cual. Mucho más rápida, menos fiel cuando suenan varios instrumentos.";
   };
   function setQ(on: boolean) {
@@ -135,16 +138,31 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     // Modo fiel: los modelos se bajan una vez (con avance) y se pasan al proceso de fondo.
     let sep: WorkerIn["sep"];
     if (useSep) {
-      try {
-        const packs = Object.entries(SEP_PACKS) as [keyof typeof SEP_PACKS, (typeof SEP_PACKS)[keyof typeof SEP_PACKS]][];
+      // Con memoria suficiente: Demucs (6 fuentes) + batería de MDX-Net; si no, los tres modelos MDX-Net.
+      const fetchAll = async (packs: [string, Pack][], total: number) => {
         const got: Record<string, ArrayBuffer> = {};
         let doneMb = 0;
         for (const [k, p] of packs) {
-          const bytes = await downloadPack(p, (pct) => { bar.value = Math.round(((doneMb + (p.mb * pct) / 100) / SEP_MB) * 100); status.textContent = `Descargando modelos de separación (una sola vez)… ${Math.round(doneMb + (p.mb * pct) / 100)} de ${Math.round(SEP_MB)} MB`; });
+          const bytes = await downloadPack(p, (pct) => { bar.value = Math.round(((doneMb + (p.mb * pct) / 100) / total) * 100); status.textContent = `Descargando modelos de separación (una sola vez)… ${Math.round(doneMb + (p.mb * pct) / 100)} de ${Math.round(total)} MB`; });
           got[k] = bytes.slice().buffer; // copia: el original queda guardado
           doneMb += p.mb;
         }
-        sep = got as NonNullable<WorkerIn["sep"]>;
+        return got;
+      };
+      try {
+        let got: Record<string, ArrayBuffer> | null = null;
+        if (canUseDemucs()) {
+          try {
+            got = await fetchAll([["ort", SEP_PACKS.ort], ["drums", SEP_PACKS.drums], ["graph", DEMUCS_PACKS.graph], ["weights", DEMUCS_PACKS.weights]], SEP6_MB);
+            if (got.weights.byteLength !== DEMUCS_WEIGHT_BYTES) got = null; // un servidor que responde otra cosa
+          }
+          catch { got = null; } // esta copia de la app no trae Demucs: se usan los modelos MDX-Net
+        }
+        if (got) sep = { ort: got.ort, drums: got.drums, demucs: { graph: got.graph, weights: got.weights } };
+        else {
+          const g = await fetchAll([["ort", SEP_PACKS.ort], ["vocals", SEP_PACKS.vocals], ["drums", SEP_PACKS.drums], ["bass", SEP_PACKS.bass]], SEP_MB);
+          sep = { ort: g.ort, drums: g.drums, vocals: g.vocals, bass: g.bass };
+        }
       } catch (e) { busy(false); status.textContent = `${(e as Error).message} Puedes usar la calidad «Rápida» mientras tanto.`; return; }
     }
     worker?.terminate();
@@ -160,7 +178,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
     const msg: WorkerIn = { L, R, modelUrl, wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep };
-    worker.postMessage(msg, [L.buffer, R.buffer, ...(sep ? Object.values(sep) : [])]);
+    worker.postMessage(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : [])]);
   }
   // MIDI hecho en otro lado (NeuralNote/MuScriptor en tu computadora, un teclado, otra app): MusicFees
   // lo convierte en pistas con tablatura, acordes y análisis.
@@ -188,7 +206,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       h("p", { class: "note" }, "Más sensibilidad encuentra notas suaves pero también ruido; menos deja solo las notas claras."),
       h("label", { class: "inline", for: "tr-mark" }, mark, "Marcar con 💬 los compases dudosos para revisarlos")),
     h("div", { class: "inline" }, go, cancel), bar,
-    h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», modelos de separación MDX-Net (KUIELab, MIT) aíslan voz, batería y bajo; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
+    h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en equipos con poca memoria, MDX-Net separa voz, batería y bajo); un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes un MIDI?"),
       h("p", { class: "note" }, "Si transcribiste en tu computadora con NeuralNote (gratis, usa el modelo MuScriptor) u otra herramienta, importa aquí el MIDI: MusicFees lo convierte en pistas con tablatura, acordes, secciones y análisis."),
       midiIn),

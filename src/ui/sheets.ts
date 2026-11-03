@@ -854,7 +854,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.3.2 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.3.3 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 
@@ -1598,6 +1598,7 @@ export class Sheets {
       ["TensorFlow.js", "Ejecuta el modelo de notas en el dispositivo", "Apache-2.0"],
       ["@tonejs/midi", "Dependencia de Basic Pitch", "MIT"],
       ["MDX-Net (KUIELab)", "Modelos de separación de voz, batería y bajo (publicados por Ultimate Vocal Remover)", "MIT"],
+      ["Demucs v4 (Meta)", "Separación en 6 fuentes: voz, batería, bajo, guitarra, piano y lo demás (htdemucs_6s, exportado a ONNX por MusicFees)", "MIT"],
       ["ONNX Runtime Web", "Ejecuta los modelos de separación en el dispositivo", "MIT"],
     ];
     const body: Record<typeof tab, HTMLElement[]> = {

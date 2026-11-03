@@ -163,7 +163,7 @@
         ],
         [
           "Modelos del transcriptor",
-          "El transcriptor usa Basic Pitch, un modelo de Spotify publicado con licencia Apache-2.0, ejecutado con TensorFlow.js (Apache-2.0), y, en la calidad «Fiel», los modelos de separación MDX-Net de KUIELab (licencia MIT, en la versión ONNX que publica el proyecto Ultimate Vocal Remover), ejecutados con ONNX Runtime Web (MIT). Los modelos de separación (~110 MB) se descargan una vez desde el sitio de MusicFees y se guardan en tu dispositivo. El reparto de guitarras y teclados, la lectura de la batería, el ritmo, la armonía, la estructura, el contrapunto y la digitación son algoritmos propios de MusicFees."
+          "El transcriptor usa Basic Pitch, un modelo de Spotify publicado con licencia Apache-2.0, ejecutado con TensorFlow.js (Apache-2.0), y, en la calidad «Fiel», el modelo de separación Demucs v4 de Meta (licencia MIT; versión de 6 fuentes, exportada a ONNX por MusicFees) y los modelos MDX-Net de KUIELab (licencia MIT, en la versión ONNX que publica el proyecto Ultimate Vocal Remover), ejecutados con ONNX Runtime Web (MIT). Los modelos de separación (~110 MB) se descargan una vez desde el sitio de MusicFees y se guardan en tu dispositivo. El reparto de guitarras y teclados, la lectura de la batería, el ritmo, la armonía, la estructura, el contrapunto y la digitación son algoritmos propios de MusicFees."
         ]
       ]
     },
