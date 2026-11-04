@@ -47,6 +47,11 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.9: transcribir sin internet de verdad
+
+- **Arreglo:** sin conexión no se podía transcribir aunque la app abriera. El service worker dejaba fuera todo lo que está en `models/`, incluido el modelo de notas (Basic Pitch) y su motor WebAssembly, que no forman parte de los paquetes descargables. Ahora, al instalarse, guarda la app completa (`precache.json`: código, fuente musical, modelo de notas y motor) y los modelos chicos se guardan también al usarse. Probado en el navegador sin red: abre, «Rápida» transcribe y «Fiel» transcribe (después de haber bajado una vez sus modelos de separación con internet).
+- Para que se active, abre la app una vez con internet (se instala el service worker nuevo y guarda todo).
+
 ## Versión 1.3.8: modelo de notas afinado con tus partituras y tablaturas desde PDF
 
 - **Reconocedor de notas afinado para guitarra, piano y «lo demás» separados.** Las capas finales de Basic Pitch (decisión de nota y de ataque, 9 003 parámetros) se entrenaron con las pistas separadas de 39 obras de Brayand y sus partituras, ancladas a los pesos originales. Medido en las 9 obras que el modelo no vio (dos ventanas): notas acertadas 33,1 → 34,2 % y 32,3 → 34,2 %, duración correcta 47,7 → 52,8 % y 42,6 → 47,3 %, notas largas partidas 70 → 56 % y 71 → 55 %. Costo: más notas repetidas juntadas (14 → 26 % y 14 → 21 %) y raíz de acordes −1,3 / +0,2. Bajo, batería, voz y «Rápida» siguen con el modelo original (en la mezcla el afinado empeora, así que no se usa ahí). Pesa 0,7 MB más.
