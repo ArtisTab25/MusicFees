@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.7: pistas importadas con varios instrumentos y corpus de medición más grande
+
+- **«Trae varios»** en las pistas ya separadas (Moises, BandLab, UVR…) y la opción «Varios instrumentos mezclados»: varias guitarras o teclados se reparten en pistas (ritmo/punteo, acordes/melodía); voz con coros o mezclas se reparten por timbre; de una pista mezclada solo se toma el instrumento que no vino aparte. Medido (piano dentro de «lo demás»): sin la casilla el teclado desaparecía; con ella vuelve como pista propia con la misma calidad de notas que si viniera separado (33,6 % contra 32,9 %).
+- **Corpus de Brayand alineado:** 49 pares partitura–audio (de 51 .gp y 61 audios), con un mapa tiempo-partitura → tiempo-audio por DTW (croma y ataques), así las obras con otro tempo (Answer ×0,94, erer ×1,04…), con final distinto o que cubren solo una parte no se descartan. 39 obras nuevas entran al evaluador.
+- **Validación de la 1.3.6 en las 39 obras nuevas:** la sensibilidad 0,7× en fuentes separadas no empeora nada y mejora lo sostenido (notas largas partidas 71 → 62 %, duración correcta 46,6 → 50,7 %).
+- Medido y **no activado** (no gana todavía): técnicas de guitarra por curva de afinación (bends, vibrato, slides, ligados, palm mute), unión de notas sostenidas por energía, ajustes del reconocedor de acordes (±1 punto contra los acordes escritos).
+
 ## Versión 1.3.6: Fiel con menos notas de más y pulso con red neuronal (opcional)
 
 - **Fiel escribe menos notas fantasma.** Sobre las fuentes separadas, el modelo de notas oía también los restos de la separación y escribía notas de más; por eso «Rápida» a veces sonaba más limpia aunque acierta mucho menos (bajo 38 % contra 71 %, notas en la pista correcta 6 % contra 80 %). Ahora la sensibilidad sobre fuentes separadas es 0,7 × la elegida, y lo que se coló de una fuente a otra (misma nota, mismo momento) queda solo donde suena más fuerte. Medido con las partituras de Brayand: notas acertadas 33,6 → 35,5 % y 29,4 → 31,8 % (fragmentos no vistos), reparto 79,9 → 81,0 % y 75,0 → 75,9 %.
