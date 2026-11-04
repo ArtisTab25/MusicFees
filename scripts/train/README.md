@@ -66,3 +66,10 @@ fragmentos que no se usaron para ajustar, los pesos nuevos reemplazan a `.cache/
 - Slakh2100: CC BY 4.0 — Manilow, Wichern, Seetharaman, Le Roux, «Cutting Music Source Separation Some Slakh»,
   WASPAA 2019. El crédito va en los avisos legales de la app si se publican pesos entrenados con él.
 - Demucs: MIT (Meta). Los pesos afinados siguen siendo MIT + el crédito de Slakh.
+
+## Resultado del segundo entrenamiento (4 nov 2026)
+
+Con `--learn guitar,piano --keep drums,bass,other,vocals --lr 1e-5 --steps 12000` ya no se pierde bajo, pero
+tampoco se gana: en 39 obras reales con partitura, el reparto guitarra/teclado, las notas y los acordes quedaron
+igual que con los pesos originales (diferencias de ±0,3 puntos). La ganancia que se veía en 18 fragmentos era ruido.
+No se publica. Slakh está sintetizado y no enseña nada que los pesos originales no sepan ya para grabaciones reales.
