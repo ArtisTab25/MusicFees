@@ -22,6 +22,8 @@ export interface StemNotes {
   guitar?: RawNote[]; keys?: RawNote[]; guitarTimbre?: import("./timbre").NoteTimbre[] | null;
   /** Lo que indicó el usuario. */
   hint?: InstrumentHint;
+  /** «Lo demás» trae varios instrumentos (pista importada marcada así): se reparte por timbre aunque haya guitarra/piano aparte. */
+  otherMixed?: boolean;
 }
 
 /**

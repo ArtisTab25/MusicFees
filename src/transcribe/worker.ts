@@ -33,6 +33,8 @@ export interface WorkerIn {
   hint?: InstrumentHint;
   /** Pistas que el usuario ya separó (Moises, BandLab, UVR…): no se separa, se transcribe cada una. */
   userStems?: Partial<Record<"vocals" | "drums" | "bass" | "guitar" | "piano" | "other", [Float32Array, Float32Array]>>;
+  /** La pista «lo demás» importada trae varios instrumentos mezclados (se reparten por timbre). */
+  otherMixed?: boolean;
 }
 export type WorkerOut =
   | { type: "progress"; pct: number; msg: string }
@@ -212,7 +214,7 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
 if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
-    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems, beat } = e.data;
+    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems, beat, otherMixed } = e.data;
     post({ type: "progress", pct: 1, msg: sep ? "Preparando los modelos de separación…" : "Preparando el modelo de notas…" });
     const be = await backend(wasmUrl, prefer);
     model ??= tf.loadGraphModel(modelUrl);
@@ -225,7 +227,7 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       const mono = { vocals: m("vocals"), drums: m("drums"), bass: m("bass"), other: m("other"), guitar: hasSix ? m("guitar") : undefined, piano: hasSix ? m("piano") : undefined };
       const h2: InstrumentHint = { ...hint, vocals: hint?.vocals ?? (userStems.vocals ? undefined : false), bass: hint?.bass ?? (userStems.bass ? undefined : false), drums: hint?.drums ?? (userStems.drums ? true : false) };
       const rhythm = beat ? await neuralRhythm(mix, beat, beat.ort, 3) : null;
-      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
+      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined, otherMixed }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
         (pct, msg) => post({ type: "progress", pct, msg }));
       post({ type: "done", analysis, backend: `${be}+pistas`, ms: performance.now() - t0 });
       return;

@@ -111,7 +111,8 @@ export function analyzeNotes(input: {
     if (gtr6 || keys6) {
       // 6 fuentes: guitarra y piano salen de su propia pista; de «lo demás» queda la línea principal
       // (vientos, cuerdas, sinte).
-      G = [...(gtr6 ?? []), ...(SIX_OPTS.leftover ? L.guitar : [])]; K = [...(keys6 ?? []), ...(SIX_OPTS.leftover ? L.keys : [])];
+      const lo = SIX_OPTS.leftover || !!stems.otherMixed;
+      G = [...(gtr6 ?? []), ...(lo ? L.guitar : [])]; K = [...(keys6 ?? []), ...(lo ? L.keys : [])];
       const gt = stems.guitarTimbre && stems.guitar && stems.guitarTimbre.length === stems.guitar.length ? alignTimbre(stems.guitar, gtr6 ?? [], stems.guitarTimbre) : [];
       const bright = gt.length ? gt.reduce((x, t) => x + t.bright, 0) / gt.length : 0.4;
       gHint = bright > 0.9 ? "gtr_dist" : bright > 0.55 ? "gtr_od" : "gtr_clean";

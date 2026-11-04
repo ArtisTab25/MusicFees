@@ -24,7 +24,7 @@ export function presence(src: Float32Array, mix: Float32Array): Float32Array {
   return out;
 }
 
-export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint; rhythm?: NeuralRhythm },
+export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint; rhythm?: NeuralRhythm; otherMixed?: boolean },
   notesOf: NotesFn, progress: (pct: number, msg: string) => void = () => {}): Promise<Analysis> {
   const hint = opts.hint ?? {};
   // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos). Si el
@@ -77,7 +77,7 @@ export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, op
   }
   const analysis = analyzeNotes({ notes: [], drums: drumHits, beats: r.beats, duration: mix.length / SR, tempo: r.tempo, mode: opts.mode, audio: r.features,
     meter: nr?.meter, downbeat: nr?.downbeat,
-    stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre, guitar, keys, guitarTimbre, hint } });
+    stems: { vocals, bass: bassNotes, other: otherNotes, otherTimbre, guitar, keys, guitarTimbre, hint, otherMixed: opts.otherMixed } });
   if (r.tempoConf < 0.35) analysis.notesForUser.push("El pulso no es muy marcado: revisa el tempo y dónde empieza el compás.");
   if (!vocals.length && hint.vocals !== false && sung < minSung) analysis.notesForUser.push("No encontré voz cantada: la melodía principal sale de los instrumentos.");
   return analysis;

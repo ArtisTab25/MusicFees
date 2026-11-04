@@ -234,7 +234,8 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
   // Pistas ya separadas en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…): no se separa
   // nada, cada archivo se transcribe con su papel.
   type StemKind = "vocals" | "drums" | "bass" | "guitar" | "piano" | "other";
-  const STEM_NAMES: [StemKind, string][] = [["vocals", "Voz"], ["drums", "Batería"], ["bass", "Bajo"], ["guitar", "Guitarra"], ["piano", "Piano o teclado"], ["other", "Lo demás"]];
+  type RowKind = StemKind | "mix";
+  const STEM_NAMES: [RowKind, string][] = [["vocals", "Voz"], ["drums", "Batería"], ["bass", "Bajo"], ["guitar", "Guitarra"], ["piano", "Piano o teclado"], ["mix", "Varios instrumentos mezclados"], ["other", "Lo demás"]];
   const guessKind = (n: string): StemKind => {
     const x = n.toLowerCase();
     if (/vocal|voice|voz|vox|sing/.test(x)) return "vocals";
@@ -244,13 +245,15 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     if (/piano|key|tecla|synth|sinte|organ/.test(x)) return "piano";
     return "other";
   };
-  const stemRows: { f: File; sel: HTMLSelectElement; el: HTMLElement }[] = [];
+  const stemRows: { f: File; sel: HTMLSelectElement; multi: HTMLInputElement; el: HTMLElement }[] = [];
   const stemList = h("div");
   const stemGo = h("button", { class: "primary", disabled: true, onclick: () => void runStems() }, "Transcribir pistas");
   const stemIn = h("input", { type: "file", multiple: true, accept: "audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac", "aria-label": "Pistas separadas", onchange: () => {
     for (const f of [...(stemIn.files ?? [])]) {
       const sel = h("select", { "aria-label": `Qué es ${f.name}` }, STEM_NAMES.map(([k, n]) => h("option", { value: k, selected: k === guessKind(f.name) }, n))) as HTMLSelectElement;
-      const row = { f, sel, el: h("div", { class: "partrow" }, h("span", null, f.name), sel) };
+      // ¿Trae más de un instrumento? (dos guitarras, piano y sinte, voz y coros, bajo y teclado…)
+      const multi = h("input", { type: "checkbox", "aria-label": `${f.name} trae varios instrumentos` }) as HTMLInputElement;
+      const row = { f, sel, multi, el: h("div", { class: "partrow" }, h("span", null, f.name), sel, h("label", { class: "inline" }, multi, "trae varios")) };
       stemRows.push(row); stemList.append(row.el);
     }
     stemIn.value = "";
@@ -262,13 +265,27 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     try {
       status.textContent = "Leyendo las pistas…";
       const got: Partial<Record<StemKind, [Float32Array, Float32Array]>> = {};
-      let n = 0;
-      for (const r of stemRows) {
-        const [l, rr] = await decode(await r.f.arrayBuffer());
-        const k = r.sel.value as StemKind;
+      const add = (k: StemKind, l: Float32Array, rr: Float32Array) => {
         const cur = got[k];
         if (cur) { const m = Math.min(cur[0].length, l.length); for (let i = 0; i < m; i++) { cur[0][i] += l[i]; cur[1][i] += rr[i]; } }
-        else got[k] = [l, rr];
+        else got[k] = [l.slice(), rr.slice()];
+      };
+      // Pistas con varios instrumentos: el algoritmo lo sabe. Varias guitarras o teclados se reparten en
+      // pistas (ritmo/punteo, acordes/melodía); voz con coros o mezclas van a «lo demás», que se reparte
+      // por timbre; un bajo con algo más da la línea del bajo y lo demás va aparte.
+      const extra: InstrumentHint = {};
+      let otherMixed = false, n = 0;
+      for (const r of stemRows) {
+        const [l, rr] = await decode(await r.f.arrayBuffer());
+        const k = r.sel.value as RowKind, multi = r.multi.checked;
+        if (k === "mix") { add("other", l, rr); otherMixed = true; }
+        else if (multi && (k === "vocals" || k === "other")) { add("other", l, rr); otherMixed = true; }
+        else if (multi && k === "bass") { add("bass", l, rr); add("other", l, rr); otherMixed = true; }
+        else {
+          add(k, l, rr);
+          if (multi && k === "guitar") extra.guitars = Math.max(extra.guitars ?? 0, 2);
+          if (multi && k === "piano") extra.keys = Math.max(extra.keys ?? 0, 2);
+        }
         n = Math.max(n, l.length);
       }
       n = Math.min(n, MAX_SECONDS * SR);
@@ -282,7 +299,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       const t = title.value.trim() && title.value !== "Transcripción" ? title.value.trim() : stemRows[0].f.name.replace(/[-_ ]*(vocals?|drums?|bass|guitar|piano|other|voz|bajo|bateria|batería)\.[^.]+$|\.[^.]+$/i, "") || "Pistas";
       const opts: TranscribeOpts = { mode: "mix", separate: false, presets: {}, drums: !!got.drums, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: t };
       const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
-      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, hint: readHint(), userStems: got };
+      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, hint: { ...extra, ...Object.fromEntries(Object.entries(readHint()).filter(([, v]) => v !== undefined)), ...(extra.guitars && !(readHint().guitars! >= 2) ? { guitars: extra.guitars } : {}), ...(extra.keys && !(readHint().keys! >= 2) ? { keys: extra.keys } : {}) }, userStems: got, otherMixed };
       launch(msg, [L.buffer, R.buffer, ...Object.values(got).flatMap((x) => [x![0].buffer, x![1].buffer])], opts);
     } catch (e) { busy(false); stemGo.disabled = false; status.textContent = `No pude leer las pistas: ${(e as Error).message}`; }
   }
@@ -314,7 +331,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("div", { class: "inline" }, go, cancel), bar,
     h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en trozos de 3,9 s para gastar poca memoria; en equipos con poca memoria, o si la separación se atasca, MDX-Net separa voz, batería y bajo). «Fiel (rápida)» usa la misma separación con menos solapamiento entre trozos y sin el segundo separador de batería. Con varios núcleos y sin internet: tras la primera descarga, todo funciona fuera de línea; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes las pistas separadas?"),
-      h("p", { class: "note" }, "Si separaste la canción en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…), sube aquí sus pistas: voz, batería, bajo, guitarra, piano, lo demás. MusicFees transcribe cada una con su instrumento, sin volver a separar. Usa la indicación de instrumentos de arriba para decir cuántas guitarras o teclados hay."),
+      h("p", { class: "note" }, "Si separaste la canción en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…), sube aquí sus pistas: voz, batería, bajo, guitarra, piano, lo demás. MusicFees transcribe cada una con su instrumento, sin volver a separar. Si una pista trae más de un instrumento (dos guitarras, piano y sinte, voz con coros, bajo con teclado…), marca «trae varios» o elige «Varios instrumentos mezclados»: así MusicFees reparte esas notas en varias pistas en vez de escribirlas como un solo instrumento."),
       stemIn, stemList, stemGo),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes un MIDI?"),
       h("p", { class: "note" }, "Si transcribiste en tu computadora con NeuralNote (gratis, usa el modelo MuScriptor) u otra herramienta, importa aquí el MIDI: MusicFees lo convierte en pistas con tablatura, acordes, secciones y análisis."),
