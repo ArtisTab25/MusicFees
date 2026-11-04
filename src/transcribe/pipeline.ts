@@ -1,6 +1,8 @@
 // Modo «Fiel», después de separar: transcribe cada fuente y arma el análisis. Puro (sin worker ni modelos)
 // para probarlo en Node con las mismas reglas que la app; el detector de notas se pasa como función.
 import { audioRhythm } from "./features";
+import { detectTechniques } from "./techniques";
+import { mergeSustained } from "./sustain";
 import { analyzeNotes } from "./analyze";
 import { transcribeDrums } from "./drums";
 import { trackBass } from "./bassline";
@@ -24,7 +26,7 @@ export function presence(src: Float32Array, mix: Float32Array): Float32Array {
   return out;
 }
 
-export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint; rhythm?: NeuralRhythm; otherMixed?: boolean },
+export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, opts: { mode: "mix" | "solo"; drums: boolean; hint?: InstrumentHint; rhythm?: NeuralRhythm; otherMixed?: boolean; techniques?: boolean },
   notesOf: NotesFn, progress: (pct: number, msg: string) => void = () => {}): Promise<Analysis> {
   const hint = opts.hint ?? {};
   // La voz solo cuenta donde realmente suena (si no, es lo que se coló de otros instrumentos). Si el
@@ -58,9 +60,17 @@ export async function transcribeSeparated(mix: Float32Array, mono: MonoStems, op
     };
     guitar = await gate(mono.guitar, "Escuchando la guitarra", 72, GATE.guitar, hint.guitars);
     keys = await gate(mono.piano, "Escuchando el piano", 78, GATE.piano, hint.keys);
+    // Notas largas partidas por el modelo (sin ataque nuevo en el audio de su fuente): se unen.
+    guitar = mergeSustained(guitar, mono.guitar, SR);
+    keys = mergeSustained(keys, mono.piano, SR);
     guitarTimbre = noteTimbres(mono.guitar, SR, guitar);
+    if (opts.techniques && guitar.length) {
+      progress(76, "Buscando bends, slides, ligados y palm mute…");
+      const fx = detectTechniques(mono.guitar, SR, guitar);
+      guitar = guitar.map((n, i) => (fx[i].length ? { ...n, fx: fx[i] } : n));
+    }
   }
-  const otherNotes = await notesOf(mono.other, mono.guitar ? "Escuchando lo demás" : "Escuchando guitarras y teclados", 84, mono.guitar ? 4 : 12);
+  const otherNotes = mergeSustained(await notesOf(mono.other, mono.guitar ? "Escuchando lo demás" : "Escuchando guitarras y teclados", 84, mono.guitar ? 4 : 12), mono.other, SR);
   progress(89, "Leyendo la batería: bombo, caja, toms y platillos…");
   const dp = presence(mono.drums, mix);
   const wantDrums = hint.drums ?? opts.drums;

@@ -8,6 +8,8 @@ export interface RawNote {
   /** Fin */ e: number;
   /** Altura MIDI (en batería: la pieza GM, 36 bombo, 38 caja, 42 hi-hat…) */ p: number;
   /** Fuerza o confianza 0–1 */ a: number;
+  /** Técnicas detectadas (guitarra): bend, vibrato, slide, hammer, palmMute. */
+  fx?: import("./techniques").Tech[];
 }
 
 export type Role = "vocals" | "melody" | "guitar" | "keys" | "harmony" | "bass" | "drums" | "all";

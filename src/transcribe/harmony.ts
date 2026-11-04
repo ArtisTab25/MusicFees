@@ -93,8 +93,33 @@ export const CHORD_TYPES: CType[] = [
   { k: "5", iv: [0, 7], w: [1, 0.95], prior: -0.07, q: "5" },
 ];
 
+/** Ajustes del reconocedor (medidos con los acordes escritos en las partituras de Brayand). */
+export const HARM_OPTS = { bassRoot: 0.12, bassTone: 0.02, bassOther: -0.06, inKey: 0.04, outKey: 0.02, pen: 0.08, penVar: 0.22, sqrt: true, ext: false };
+/** Acordes extendidos: se reconocen para no confundir la raíz (p. ej. Em9 con G); se nombran por su tríada. */
+export const EXT_TYPES: CType[] = [
+  { k: "6", iv: [0, 4, 7, 9], w: [1, 0.8, 0.8, 0.6], prior: -0.06, q: "M" },
+  { k: "m6", iv: [0, 3, 7, 9], w: [1, 0.8, 0.8, 0.6], prior: -0.07, q: "m" },
+  { k: "add9", iv: [0, 2, 4, 7], w: [1, 0.6, 0.8, 0.9], prior: -0.06, q: "M" },
+  { k: "madd9", iv: [0, 2, 3, 7], w: [1, 0.6, 0.8, 0.9], prior: -0.065, q: "m" },
+  { k: "9", iv: [0, 2, 4, 7, 10], w: [1, 0.55, 0.8, 0.7, 0.7], prior: -0.07, q: "M" },
+  { k: "m9", iv: [0, 2, 3, 7, 10], w: [1, 0.55, 0.8, 0.7, 0.7], prior: -0.07, q: "m" },
+  { k: "maj9", iv: [0, 2, 4, 7, 11], w: [1, 0.55, 0.8, 0.7, 0.7], prior: -0.075, q: "M" },
+  { k: "7sus4", iv: [0, 5, 7, 10], w: [1, 0.8, 0.8, 0.7], prior: -0.08, q: "s" },
+];
+
 interface Template { root: number; t: CType; vec: number[]; pcs: Set<number> }
 const TEMPLATES: Template[] = [];
+export function setExtended(on: boolean) {
+  HARM_OPTS.ext = on;
+  TEMPLATES.length = 0;
+  for (let r = 0; r < 12; r++) for (const t of on ? [...CHORD_TYPES, ...EXT_TYPES] : CHORD_TYPES) addTemplate(r, t);
+}
+function addTemplate(r: number, t: CType) {
+  const v = new Array(12).fill(0);
+  t.iv.forEach((iv, i) => (v[mod12(r + iv)] = t.w[i]));
+  const n = Math.hypot(...v);
+  TEMPLATES.push({ root: r, t, vec: v.map((x) => x / n), pcs: new Set(t.iv.map((iv) => mod12(r + iv))) });
+}
 for (let r = 0; r < 12; r++) for (const t of CHORD_TYPES) {
   const v = new Array(12).fill(0);
   t.iv.forEach((iv, i) => (v[mod12(r + iv)] = t.w[i]));
@@ -117,18 +142,18 @@ export function recognizeChords(chroma: number[][], bass: number[][], energy: nu
   const medE = sortedE[Math.floor(sortedE.length / 2)] || 1;
   const emit = (k: number): Float64Array => {
     const out = new Float64Array(S);
-    const c = unit(chroma[k].map((x) => Math.sqrt(x)));
+    const c = unit(chroma[k].map((x) => (HARM_OPTS.sqrt ? Math.sqrt(x) : x)));
     const bsum = bass[k].reduce((a, b) => a + b, 0);
     const bpc = bsum > 0 ? bass[k].indexOf(Math.max(...bass[k])) : -1;
     TEMPLATES.forEach((tp, i) => {
       let s = 0;
       for (let p = 0; p < 12; p++) s += c[p] * tp.vec[p];
       s += tp.t.prior;
-      if (bpc >= 0) s += bpc === tp.root ? 0.12 : tp.pcs.has(bpc) ? 0.02 : -0.06;
+      if (bpc >= 0) s += bpc === tp.root ? HARM_OPTS.bassRoot : tp.pcs.has(bpc) ? HARM_OPTS.bassTone : HARM_OPTS.bassOther;
       // Diatónico a la tonalidad: un pequeño premio por cada nota del acorde dentro de la escala.
       let inKey = 0;
       for (const p of tp.pcs) if (scale.has(p)) inKey++;
-      s += inKey === tp.pcs.size ? 0.04 : -0.02 * (tp.pcs.size - inKey);
+      s += inKey === tp.pcs.size ? HARM_OPTS.inKey : -HARM_OPTS.outKey * (tp.pcs.size - inKey);
       out[i] = s;
     });
     // Sin acorde: silencios o tiempos casi vacíos.
@@ -140,7 +165,7 @@ export function recognizeChords(chroma: number[][], bass: number[][], energy: nu
   const back: Int16Array[] = [];
   for (let k = 1; k < B; k++) {
     const e = emit(k), cur = new Float64Array(S), bk = new Int16Array(S);
-    const pen = 0.08 + 0.22 * (1 - Math.max(0, Math.min(1, strength[k] ?? 0)));
+    const pen = HARM_OPTS.pen + HARM_OPTS.penVar * (1 - Math.max(0, Math.min(1, strength[k] ?? 0)));
     let bestPrev = 0;
     for (let j = 1; j < S; j++) if (prev[j] > prev[bestPrev]) bestPrev = j;
     for (let i = 0; i < S; i++) {

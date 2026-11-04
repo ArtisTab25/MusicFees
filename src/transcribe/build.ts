@@ -2,7 +2,8 @@
 // tresillos, lo que mejor encaje en cada tiempo), digita las partes de cuerda, arma una pista por parte
 // con su instrumento, y escribe tempo, compás, armadura, secciones, acordes con diagrama y avisos.
 import * as at from "@coderline/alphatab";
-import { applyOp, createSong, finishScore, type ClipBeat, type ClipNote, type Op, type SongAnalysis } from "../score/model";
+import { applyOp, createSong, finishScore, type ClipBeat, type ClipNote, type NoteFx, type Op, type SongAnalysis } from "../score/model";
+import type { Tech } from "./techniques";
 import { pack } from "../score/structure";
 import { clipTicks, restsFor } from "../score/clip";
 import { presetById, TUNINGS } from "../score/instruments";
@@ -35,7 +36,7 @@ export function suggestPreset(part: Part): string {
   return part.role === "all" ? "gtr_steel" : "gtr_clean";
 }
 
-interface Ev { tick: number; end: number; pitches: number[]; amps: number[] }
+interface Ev { tick: number; end: number; pitches: number[]; amps: number[]; fx?: Map<number, NoteFx[]> }
 
 /**
  * Rejilla por tiempo y por pista: corcheas (2), semicorcheas (4) o tresillos (3). Se elige la que
@@ -63,6 +64,9 @@ function quantTick(q: number, grid: number[]): number {
 }
 
 /** Notas → eventos (acordes por ataque) en ticks. */
+/** Técnicas detectadas → marcas de nota de la partitura. */
+const fxName = (t: Tech): NoteFx => (t === "palmMute" ? "palmMute" : t);
+
 function toEvents(notes: RawNote[], q: (t: number) => number, grid: number[], drums: boolean): Ev[] {
   const map = new Map<number, Ev>();
   for (const n of notes) {
@@ -73,6 +77,7 @@ function toEvents(notes: RawNote[], q: (t: number) => number, grid: number[], dr
     if (end <= tick) end = tick + step;
     const ev = map.get(tick) ?? { tick, end, pitches: [], amps: [] };
     if (!ev.pitches.includes(n.p)) { ev.pitches.push(n.p); ev.amps.push(n.a); }
+    if (n.fx?.length) (ev.fx ??= new Map()).set(n.p, n.fx.map(fxName));
     ev.end = Math.max(ev.end, end);
     map.set(tick, ev);
   }
@@ -177,7 +182,9 @@ export function buildScore(a: Analysis, opts: TranscribeOpts): Score {
         tuning = chooseTuning(evPitches, [TUNINGS.std, TUNINGS.dropD, TUNINGS.dStd, TUNINGS.dropC].map((t, i) => ({ id: String(i), strings: t.strings }))).strings;
       if (tuning && tuning.length === 4 && Math.min(...x.evs.flatMap((e) => e.pitches)) < tuning[3]) tuning = TUNINGS.bass5?.strings ?? tuning;
       const fr = fretEvents(evPitches, tuning ?? TUNINGS.std.strings, x.preset.id.startsWith("bass") ? 20 : 22);
-      notesOf = (i) => fr.placed[i].map((n) => ({ pitch: n.pitch, str: n.str, fret: n.fret, fx: [] }));
+      // Técnicas (bend, slide, ligado, vibrato, palm mute) solo en pistas de guitarra con tablatura.
+      const guitarFx = x.part.role === "guitar" || x.part.role === "melody";
+      notesOf = (i) => fr.placed[i].map((n) => ({ pitch: n.pitch, str: n.str, fret: n.fret, fx: guitarFx ? [...(x.evs[i].fx?.get(n.pitch) ?? [])] : [] }));
     } else if (x.preset.kind === "drums") {
       notesOf = (i) => x.evs[i].pitches.map((p) => ({ drum: p, fx: [] }));
     } else {
