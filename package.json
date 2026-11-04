@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "build:artifact": "node scripts/build-artifact.mjs",
-    "test": "esbuild tests/model.test.ts tests/transcribe.test.ts --bundle --platform=node --format=esm --outdir=tests --entry-names=_[name] --out-extension:.js=.mjs --external:@coderline/alphatab --log-level=warning && node --test tests/_model.test.mjs tests/_transcribe.test.mjs",
+    "test": "esbuild tests/model.test.ts tests/transcribe.test.ts tests/omr.test.ts --bundle --platform=node --format=esm --outdir=tests --entry-names=_[name] --out-extension:.js=.mjs --external:@coderline/alphatab --log-level=warning && node --test tests/_model.test.mjs tests/_transcribe.test.mjs tests/_omr.test.mjs",
     "predev": "node scripts/wam.mjs"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@webaudiomodules/sdk": "0.0.12",
     "jspdf": "4.2.1",
     "onnxruntime-web": "1.20.1",
+    "pdfjs-dist": "6.4.299",
     "spessasynth_lib": "4.3.14",
     "tone": "15.1.22"
   },

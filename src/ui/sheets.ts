@@ -540,7 +540,7 @@ export class Sheets {
         item("Guardar", "Ahora mismo (también se guarda solo)", close(() => this.c.saveNow())),
         item("Nueva canción", "Por estilo: rock, bossa, corrido…", () => this.newSong()),
         item("Biblioteca", "Tus canciones y pistas de muestra", () => this.library()),
-        item("Importar archivo", "Guitar Pro (.gp, .gp5, .gpx), MusicXML", () => this.importDialog()),
+        item("Importar archivo", "Guitar Pro (.gp, .gp5, .gpx), MusicXML, tablatura en PDF", () => this.importDialog()),
         item("Compartir con tu dúo", "Enlace para editar juntos", () => this.share()),
         item("Exportar", "MP3, WAV, Guitar Pro, MIDI, PDF", () => this.exportDialog()),
         item("Versiones", "Historial automático y versiones con nombre", () => this.versionsSheet()),
@@ -1267,19 +1267,30 @@ export class Sheets {
       h("p", { class: "note" }, "Quien abra este enlace puede escuchar y editar la canción contigo en vivo: verás su cursor en ámbar y sus cambios al instante. No compartas el enlace con quien no deba editar."));
   }
   importDialog() {
-    const input = h("input", { type: "file", accept: ".gp,.gp3,.gp4,.gp5,.gpx,.xml,.musicxml,.mxl,.cap,.tex" });
+    const input = h("input", { type: "file", accept: ".gp,.gp3,.gp4,.gp5,.gpx,.xml,.musicxml,.mxl,.cap,.tex,.pdf" });
     input.onchange = async () => {
       const f = input.files?.[0];
       if (!f) return;
       try {
-        const score = importFile(new Uint8Array(await f.arrayBuffer()));
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        let note = "";
+        let score;
+        if (/\.pdf$/i.test(f.name)) {
+          // Tablatura en PDF digital (exportado de Guitar Pro, MuseScore…): se leen los números y las líneas
+          this.c.toast("Leyendo la tablatura del PDF…");
+          const [{ pdfToTex }, pdfjs, worker] = await Promise.all([import("../omr/index"), import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]);
+          pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+          const r = await pdfToTex(pdfjs, bytes, f.name.replace(/\.pdf$/i, ""));
+          score = importFile(new TextEncoder().encode(r.tex));
+          note = ` Cuerdas y trastes vienen del PDF; el ritmo es aproximado, revísalo.${r.reading.warnings.length ? " " + r.reading.warnings.join(" ") : ""}`;
+        } else score = importFile(bytes);
         this.close();
         await this.c.importScore(score, f.name);
-        this.c.toast(`Importé «${score.title}»: ${score.tracks.length} pistas, ${score.masterBars.length} compases.`);
+        this.c.toast(`Importé «${score.title}»: ${score.tracks.length} pistas, ${score.masterBars.length} compases.${note}`);
       } catch (e) { this.c.toast(`No pude leer ese archivo: ${(e as Error).message}`, true); }
     };
     this.open("Importar archivo", "full", input,
-      h("p", { class: "note" }, "Se agrega a tu biblioteca como canción nueva y se abre. Formatos: Guitar Pro 3 a 8 (.gp3 .gp4 .gp5 .gpx .gp), MusicXML y alphaTex."));
+      h("p", { class: "note" }, "Se agrega a tu biblioteca como canción nueva y se abre. Formatos: Guitar Pro 3 a 8 (.gp3 .gp4 .gp5 .gpx .gp), MusicXML, alphaTex y tablaturas en PDF (exportadas de un programa, no escaneadas: el ritmo queda aproximado)."));
   }
   /** Exportar: toda la canción, solo una pista o solo unos compases (la selección o una sección). */
   exportDialog(preset?: { scope: "song" | "track" | "range"; range?: { s: number; e: number; name?: string } }) {

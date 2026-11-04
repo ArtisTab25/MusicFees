@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#fff}</style></head><body>
+<div id="at"></div>
+<script type="module">
+import * as alphaTab from "./at/alphaTab.mjs";
+const el = document.getElementById("at");
+const api = new alphaTab.AlphaTabApi(el, { core: { engine: "svg", fontDirectory: "./at/font/", useWorkers: false, enableLazyLoading: false, file: "./song.gp" + location.search.replace("?", "#") },
+  display: { layoutMode: "page", staveProfile: new URLSearchParams(location.search).get("p") || "ScoreTab", scale: 0.9, resources: {} }, player: { enablePlayer: false } });
+api.renderFinished.on(() => { window.done = true; });
+api.scoreLoaded.on((s) => { const t = +(new URLSearchParams(location.search).get("t") || 0); api.renderTracks([s.tracks[t]]); });
+</script></body></html>
