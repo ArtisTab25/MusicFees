@@ -23,6 +23,12 @@ for (const d of ["models/mdx/vocals", "models/mdx/drums", "models/mdx/bass", "mo
   const dir = join(OUT, d);
   if (existsSync(dir)) for (const f of readdirSync(dir)) if (f.endsWith(".bin")) renameSync(join(dir, f), join(dir, `${f}.ogg`));
 }
+// El artefacto no acepta archivos de texto con bytes ESC crudos: en JS solo pueden estar dentro de cadenas o
+// expresiones regulares (pdf.js tiene uno), donde «\x1b» significa lo mismo.
+for (const f of readdirSync(join(OUT, "assets"))) if (/\.m?js$/.test(f)) {
+  const p = join(OUT, "assets", f), t = readFileSync(p, "utf8");
+  if (t.includes("\x1b")) writeFileSync(p, t.split("\x1b").join("\\x1b"));
+}
 // Modelo de notas del transcriptor: los pesos (.bin) viajan como .ogg y un model.art.json apunta a ellos.
 const BP = join(OUT, "models/basic-pitch");
 if (existsSync(BP)) {
