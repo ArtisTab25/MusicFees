@@ -26,10 +26,13 @@ for (const d of ["models/mdx/vocals", "models/mdx/drums", "models/mdx/bass", "mo
 // Modelo de notas del transcriptor: los pesos (.bin) viajan como .ogg y un model.art.json apunta a ellos.
 const BP = join(OUT, "models/basic-pitch");
 if (existsSync(BP)) {
-  const mj = JSON.parse(readFileSync(join(BP, "model.json"), "utf8"));
-  for (const g of mj.weightsManifest) g.paths = g.paths.map((p) => { renameSync(join(BP, p), join(BP, `${p}.ogg`)); return `${p}.ogg`; });
-  writeFileSync(join(BP, "model.art.json"), JSON.stringify(mj));
-  rmSync(join(BP, "model.json"));
+  for (const name of ["model", "stems"]) { // original (mezcla) y afinado para pistas separadas
+    if (!existsSync(join(BP, `${name}.json`))) continue;
+    const mj = JSON.parse(readFileSync(join(BP, `${name}.json`), "utf8"));
+    for (const g of mj.weightsManifest) g.paths = g.paths.map((p) => { renameSync(join(BP, p), join(BP, `${p}.ogg`)); return `${p}.ogg`; });
+    writeFileSync(join(BP, `${name}.art.json`), JSON.stringify(mj));
+    rmSync(join(BP, `${name}.json`));
+  }
   renameSync(join(BP, "LICENSE"), join(BP, "LICENSE.txt"));
 }
 

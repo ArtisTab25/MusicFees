@@ -21,7 +21,7 @@ import type { Analysis, InstrumentHint, RawNote } from "./types";
 export interface WorkerIn {
   /** Mezcla estéreo a 44.1 kHz. */
   L: Float32Array; R: Float32Array;
-  modelUrl: string; wasmUrl: string; mode: "mix" | "solo"; drums: boolean; sensitivity: number; prefer?: string;
+  modelUrl: string; /** Pesos afinados con pistas separadas (mismo grafo); si no viene, se usa modelUrl. */ stemModelUrl?: string; wasmUrl: string; mode: "mix" | "solo"; drums: boolean; sensitivity: number; prefer?: string;
   /**
    * Modo fiel: bytes del motor ONNX y de los modelos. Con `demucs` (red + pesos en float16) se separa en
    * 6 fuentes y de MDX-Net solo se usa la batería; sin él, los tres modelos MDX-Net.
@@ -51,6 +51,8 @@ const SR = 22050;
 const SEP_SENS = 0.7;
 
 let model: Promise<tf.GraphModel> | null = null;
+/** Modelo de notas para pistas separadas: Basic Pitch afinado con las partituras de Brayand (ver scripts/train/notes). */
+let stemModel: Promise<tf.GraphModel> | null = null;
 /** Aceleración: WebAssembly (SIMD; el más estable en teléfonos), si no WebGL y, al final, JavaScript puro. */
 async function backend(wasmUrl: string, prefer?: string): Promise<string> {
   setWasmPaths(wasmUrl);
@@ -77,8 +79,8 @@ function patchWasmFill() {
 }
 
 /** Notas de una señal mono a 22.05 kHz. `range`: parte del avance total que le toca (0–1). */
-async function notesOf(pcm: Float32Array, sensitivity: number, label: string, from: number, span: number): Promise<RawNote[]> {
-  const bp = new BasicPitch(model!);
+async function notesOf(pcm: Float32Array, sensitivity: number, label: string, from: number, span: number, m: Promise<tf.GraphModel> = model!): Promise<RawNote[]> {
+  const bp = new BasicPitch(m);
   const frames: number[][] = [], onsets: number[][] = [];
   await bp.evaluateModel(pcm, (f, o) => { for (const x of f) frames.push(x); for (const x of o) onsets.push(x); },
     (p) => post({ type: "progress", pct: from + p * span, msg: `${label}… ${Math.round(p * 100)} %` }));
@@ -214,10 +216,11 @@ async function separateAll(L: Float32Array, R: Float32Array, sep: NonNullable<Wo
 if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const t0 = performance.now();
   try {
-    const { L, R, modelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems, beat, otherMixed } = e.data;
+    const { L, R, modelUrl, stemModelUrl, wasmUrl, mode, drums, sensitivity, prefer, sep, hint, userStems, beat, otherMixed } = e.data;
     post({ type: "progress", pct: 1, msg: sep ? "Preparando los modelos de separación…" : "Preparando el modelo de notas…" });
     const be = await backend(wasmUrl, prefer);
     model ??= tf.loadGraphModel(modelUrl);
+    if (stemModelUrl) stemModel ??= tf.loadGraphModel(stemModelUrl).catch(() => model!); // sin los pesos afinados, el original
     const mix = toMono22k(L, R);
     if (userStems) {
       // Pistas ya separadas: cada una se transcribe con su papel; las que faltan quedan en silencio.
@@ -227,7 +230,7 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       const mono = { vocals: m("vocals"), drums: m("drums"), bass: m("bass"), other: m("other"), guitar: hasSix ? m("guitar") : undefined, piano: hasSix ? m("piano") : undefined };
       const h2: InstrumentHint = { ...hint, vocals: hint?.vocals ?? (userStems.vocals ? undefined : false), bass: hint?.bass ?? (userStems.bass ? undefined : false), drums: hint?.drums ?? (userStems.drums ? true : false) };
       const rhythm = beat ? await neuralRhythm(mix, beat, beat.ort, 3) : null;
-      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined, otherMixed }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
+      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined, otherMixed }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, stemModel ?? model!),
         (pct, msg) => post({ type: "progress", pct, msg }));
       post({ type: "done", analysis, backend: `${be}+pistas`, ms: performance.now() - t0 });
       return;
@@ -252,7 +255,7 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       guitar: stems.guitar ? toMono22k(...stems.guitar) : undefined, piano: stems.piano ? toMono22k(...stems.piano) : undefined,
     };
     const rhythm = beat ? await neuralRhythm(mix, beat, sep.ort, 61) : null;
-    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span),
+    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, stemModel ?? model!),
       (pct, msg) => post({ type: "progress", pct, msg }));
     post({ type: "done", analysis, backend: `${be}+${ep}`, ms: performance.now() - t0 });
   } catch (err) {
