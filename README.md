@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.8: modelo de notas afinado con tus partituras y tablaturas desde PDF
+
+- **Reconocedor de notas afinado para guitarra, piano y «lo demás» separados.** Las capas finales de Basic Pitch (decisión de nota y de ataque, 9 003 parámetros) se entrenaron con las pistas separadas de 39 obras de Brayand y sus partituras, ancladas a los pesos originales. Medido en las 9 obras que el modelo no vio (dos ventanas): notas acertadas 33,1 → 34,2 % y 32,3 → 34,2 %, duración correcta 47,7 → 52,8 % y 42,6 → 47,3 %, notas largas partidas 70 → 56 % y 71 → 55 %. Costo: más notas repetidas juntadas (14 → 26 % y 14 → 21 %) y raíz de acordes −1,3 / +0,2. Bajo, batería, voz y «Rápida» siguen con el modelo original (en la mezcla el afinado empeora, así que no se usa ahí). Pesa 0,7 MB más.
+- **Importar tablaturas en PDF** (Importar archivo → .pdf): en los PDF exportados por un programa (Guitar Pro, MuseScore, TuxGuitar…) los números de la tablatura son texto, así que se leen exactos con pdf.js, sin reconocimiento de imagen: cuerdas, trastes, compases, acordes, ligaduras y notas muertas. Medido con PDFs generados desde 8 obras: 85–100 % de lo leído es correcto y se encuentra el 79–99 %. El ritmo se estima por el espaciado y queda aproximado. Los escaneos y fotos todavía no.
+- **Alineación fina del corpus:** las partituras se ajustan al audio nota por nota (ataques escritos sobre un ataque real 38 → 64 %). Con la regla corregida, la misma app mide bajo 34,9 → 51,1 % y notas 28,3 → 37,0 % en las 39 obras: buena parte del error que se culpaba al transcriptor era desfase de la medición.
+- Medido y **no publicado:** segundo entrenamiento de Demucs con Slakh (igual que el original en 39 obras reales); afinar todo Basic Pitch y no solo las capas finales (mejor en la validación por cuadros, peor en la transcripción completa: notas 33 → 29 %).
+
 ## Versión 1.3.7: pistas importadas con varios instrumentos y corpus de medición más grande
 
 - **«Trae varios»** en las pistas ya separadas (Moises, BandLab, UVR…) y la opción «Varios instrumentos mezclados»: varias guitarras o teclados se reparten en pistas (ritmo/punteo, acordes/melodía); voz con coros o mezclas se reparten por timbre; de una pista mezclada solo se toma el instrumento que no vino aparte. Medido (piano dentro de «lo demás»): sin la casilla el teclado desaparecía; con ella vuelve como pista propia con la misma calidad de notas que si viniera separado (33,6 % contra 32,9 %).

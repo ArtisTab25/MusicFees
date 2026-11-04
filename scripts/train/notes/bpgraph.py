@@ -63,7 +63,9 @@ class BPGraph(torch.nn.Module):
                 r = OPS[op](ins, a)
             memo[name] = r
             return r
-        return {k: ev(v) for k, v in self.map.items()}
+        out = {k: ev(v) for k, v in self.map.items()}
+        memo.clear()  # ciclo ev↔memo: liberar ya
+        return out
 
     def export_bin(self, path):
         """Escribe el .bin con los pesos actuales, en el mismo orden y formato que el original."""

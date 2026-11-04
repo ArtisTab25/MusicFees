@@ -1,0 +1,4 @@
+Basic Pitch (Spotify, Apache-2.0): model.json + group1-shard1of1.bin son los originales.
+stems.json + stems.bin: el mismo modelo con las capas finales de nota y de ataque afinadas por MusicFees
+(4 nov 2026) con pistas separadas y partituras propias de Brayand alineadas al audio; se usan solo para
+guitarra, piano y «lo demás» ya separados. Cambios descritos en scripts/train/notes del repositorio.

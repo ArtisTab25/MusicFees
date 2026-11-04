@@ -33,15 +33,17 @@ def heads(F):
         nd = g.nodes[name]
         r = g.const(name) if nd["op"] == "Const" else OPS[nd["op"]]([ev(i) for i in nd.get("input", []) if not i.startswith("^")], nd.get("attr", {}))
         memo[name] = r; return r
-    return ev(g.map["note"]), ev(g.map["onset"])
+    r = ev(g.map["note"]), ev(g.map["onset"])
+    memo.clear()  # ev se refiere a sí misma (ciclo): sin esto la memoria solo se libera cuando pasa el recolector
+    return r
 
-val = set(v for v in a.val.split(",") if v); exc = set(v for v in a.exclude.split(",") if v)
+val = set(v for v in a.val.split("|") if v); exc = set(v for v in a.exclude.split("|") if v)
 stems = set(a.stems.split(","))
 items = {"train": [], "val": []}
 for j in sorted(glob.glob(f"{a.ds}/*.json")):
     D = json.load(open(j))
     if D["stem"] not in stems or D["song"] in exc: continue
-    F = np.load(j[:-5] + ".npy", mmap_mode="r")
+    F = np.load(j[:-5] + ".npy")
     for i, (lab, r) in enumerate(zip(D["lab"], D["rms"])):
         if not lab["pos"] and r < 2e-3: continue
         items["val" if D["song"] in val else "train"].append((F, i, lab))
@@ -75,8 +77,8 @@ def frame_f(p, t, m, th):
 def evaluate():
     tot = [0, 0]; acc = {"n": [0, 0, 0], "o": [0, 0, 0]}
     with torch.no_grad():
-        for i in range(0, len(items["val"]), 32):
-            F, note, on, mask = batch(items["val"][i:i + 32])
+        for i in range(0, len(items["val"]), 8):
+            F, note, on, mask = batch(items["val"][i:i + 8])
             ln, lo, pn, po = loss_fn(F, note, on, mask)
             tot[0] += ln.item() * len(F); tot[1] += lo.item() * len(F)
             for k, (p, t, th) in {"n": (pn, note, 0.3), "o": (po, on, 0.5)}.items():

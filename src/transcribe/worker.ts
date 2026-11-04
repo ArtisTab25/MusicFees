@@ -51,7 +51,8 @@ const SR = 22050;
 const SEP_SENS = 0.7;
 
 let model: Promise<tf.GraphModel> | null = null;
-/** Modelo de notas para pistas separadas: Basic Pitch afinado con las partituras de Brayand (ver scripts/train/notes). */
+/** Modelo de notas para guitarra, piano y «lo demás» ya separados: Basic Pitch afinado con las partituras de
+ * Brayand (scripts/train/notes). La voz, el bajo y la mezcla (Rápida) siguen con el original. */
 let stemModel: Promise<tf.GraphModel> | null = null;
 /** Aceleración: WebAssembly (SIMD; el más estable en teléfonos), si no WebGL y, al final, JavaScript puro. */
 async function backend(wasmUrl: string, prefer?: string): Promise<string> {
@@ -230,7 +231,7 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       const mono = { vocals: m("vocals"), drums: m("drums"), bass: m("bass"), other: m("other"), guitar: hasSix ? m("guitar") : undefined, piano: hasSix ? m("piano") : undefined };
       const h2: InstrumentHint = { ...hint, vocals: hint?.vocals ?? (userStems.vocals ? undefined : false), bass: hint?.bass ?? (userStems.bass ? undefined : false), drums: hint?.drums ?? (userStems.drums ? true : false) };
       const rhythm = beat ? await neuralRhythm(mix, beat, beat.ort, 3) : null;
-      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined, otherMixed }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, stemModel ?? model!),
+      const analysis = await transcribeSeparated(mix, mono, { mode: "mix", drums, hint: h2, rhythm: rhythm ?? undefined, otherMixed }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, /voz|bajo/.test(label) ? model! : stemModel ?? model!),
         (pct, msg) => post({ type: "progress", pct, msg }));
       post({ type: "done", analysis, backend: `${be}+pistas`, ms: performance.now() - t0 });
       return;
@@ -255,7 +256,7 @@ if (self.name !== "em-pthread") self.onmessage = async (e: MessageEvent<WorkerIn
       guitar: stems.guitar ? toMono22k(...stems.guitar) : undefined, piano: stems.piano ? toMono22k(...stems.piano) : undefined,
     };
     const rhythm = beat ? await neuralRhythm(mix, beat, sep.ort, 61) : null;
-    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, stemModel ?? model!),
+    const analysis = await transcribeSeparated(mix, mono, { mode, drums, hint, rhythm: rhythm ?? undefined }, (pcm, label, from, span) => notesOf(pcm, sensitivity * SEP_SENS, label, from, span, /voz|bajo/.test(label) ? model! : stemModel ?? model!),
       (pct, msg) => post({ type: "progress", pct, msg }));
     post({ type: "done", analysis, backend: `${be}+${ep}`, ms: performance.now() - t0 });
   } catch (err) {
