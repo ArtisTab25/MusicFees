@@ -23,6 +23,14 @@ const precacheList = (): Plugin => ({
     for (const d of ["assets", "font", "models/basic-pitch", "models/tfjs-wasm", "icons"]) if (existsSync(join(out, d))) walk(d);
     for (const f of ["index.html", "manifest.webmanifest"]) if (existsSync(join(out, f))) files.push(f);
     writeFileSync(join(out, "precache.json"), JSON.stringify(files));
+    // Plugins: lista aparte para descargarlos a pedido (Sonido y estudio → Plugins sin internet).
+    if (existsSync(join(out, "wam"))) {
+      const wam: [string, number][] = [];
+      const w = (d: string) => { for (const f of readdirSync(join(out, d))) { const r = `${d}/${f}`, st = statSync(join(out, r)); if (st.isDirectory()) w(r); else if (!/\.(ts|dsp|md|map)$/.test(f) && f !== "files.json") wam.push([r, st.size]); } };
+      w("wam");
+      const bytes = wam.reduce((x, [, b]) => x + b, 0);
+      writeFileSync(join(out, "wam", "files.json"), JSON.stringify({ files: wam, bytes, v: `${wam.length}-${bytes}` }));
+    }
   },
 });
 

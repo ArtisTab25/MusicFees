@@ -10,6 +10,7 @@ import { analysisOf, kindOf, fxMap, fxChanges, fxAtBar, instrumentChanges, maste
 import { Capacitor } from "@capacitor/core";
 import { addVersion, deleteTrash, deleteVersion, libMeta, parseTags, setLibMeta, trash, trashList, versions, type LibMeta } from "../collab/vault";
 import { WAM_CATALOG, PLUGIN_CATS, pluginName, publicPluginUrl } from "../player/wam";
+import { offlinePluginsAvailable, wamList, savedVersion, downloadPlugins } from "../player/offlinePlugins";
 import { FX_PRESETS, FX_SLIDERS, MASTER_PRESETS, MASTER_SLIDERS, PEDALS, octaveSemis, pedalInfo, presetFx } from "../player/fxPresets";
 import { GM_NAMES, PRESETS, STYLES, TUNINGS, gmName, presetById } from "../score/instruments";
 import { planConvert } from "../score/convert";
@@ -620,6 +621,7 @@ export class Sheets {
         item("Tempo", "Por compás, gradual, tap", () => this.tempo()),
         item("Masterizado", "EQ, compresión, ancho, volumen final", () => this.mastering()),
         item("Banco de sonidos", this.c.bank.name, () => this.banks()),
+        ...(offlinePluginsAvailable(Capacitor.isNativePlatform()) ? [item("Plugins sin internet", savedVersion() ? "Guardados en este equipo ✓" : "Descargarlos todos para usarlos sin conexión", () => void this.offlinePlugins())] : []),
         item(engine.fx ? "Apagar motor de estudio" : "Activar efectos", engine.fx ? "Vuelve al sonido básico" : "Distorsión, pedales, EQ, reverb por pista", close(() => this.c.setFx(!engine.fx))),
         item("Mezclador", "Volumen, paneo, solo", () => this.tracks()),
       ],
@@ -911,7 +913,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.3.9 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.3.10 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 
@@ -1265,6 +1267,25 @@ export class Sheets {
     const shareBtn = "share" in navigator ? h("button", { class: "ghost", onclick: () => navigator.share({ title: this.c.ed.score.title, url }).catch(() => {}) }, "Enviar…") : null;
     this.open("Compartir con tu dúo", "full", field, h("div", { class: "inline" }, copy, shareBtn),
       h("p", { class: "note" }, "Quien abra este enlace puede escuchar y editar la canción contigo en vivo: verás su cursor en ámbar y sus cambios al instante. No compartas el enlace con quien no deba editar."));
+  }
+  /** Descarga todos los plugins al almacén del service worker para usarlos sin internet. */
+  async offlinePlugins() {
+    const list = await wamList();
+    if (!list) { this.c.toast("No pude leer la lista de plugins (¿sin internet?).", true); return; }
+    const mb = (b: number) => `${(b / 1048576).toFixed(0)} MB`;
+    const ok = savedVersion() === list.v;
+    const bar = h("progress", { max: 1, value: 0, style: "width:100%" }) as HTMLProgressElement;
+    const msg = h("p", { class: "note", role: "status" }, ok ? "Ya están guardados en este equipo: funcionan sin conexión." : `Se descargan ${list.files.length} archivos (${mb(list.bytes)}) una sola vez.`);
+    const go = h("button", { class: "primary", onclick: async () => {
+      go.disabled = true;
+      try {
+        const failed = await downloadPlugins(list, (d, t) => { bar.value = d / t; msg.textContent = `Descargando… ${mb(d)} de ${mb(t)}`; });
+        msg.textContent = failed ? `Faltaron ${failed} archivos (revisa la conexión y vuelve a intentar).` : "Listo: los plugins funcionan sin internet en este equipo.";
+        go.disabled = false; go.textContent = failed ? "Reintentar" : "Volver a revisar";
+      } catch (e) { msg.textContent = (e as Error).message; go.disabled = false; }
+    } }, ok ? "Volver a revisar" : `Descargar (${mb(list.bytes)})`);
+    this.open("Plugins sin internet", "full", msg, bar, h("div", { class: "inline" }, go),
+      h("p", { class: "note" }, "Los plugins que ya usaste con internet también quedan guardados solos. Con datos móviles conviene descargarlos con wifi. En la app de Android los plugins de la comunidad todavía necesitan internet."));
   }
   importDialog() {
     const input = h("input", { type: "file", accept: ".gp,.gp3,.gp4,.gp5,.gpx,.xml,.musicxml,.mxl,.cap,.tex,.pdf" });

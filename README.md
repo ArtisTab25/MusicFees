@@ -47,6 +47,12 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.3.10: plugins sin internet
+
+- **Sonido y estudio → Plugins sin internet:** descarga de una vez todos los plugins (520 archivos, 49 MB) al almacén de la app; después funcionan sin conexión. Los que ya se usaron con internet también quedan guardados solos. Probado sin red en el navegador: los 520 archivos se sirven y los 27 módulos de plugin cargan.
+- Arreglo en el service worker: lo guardado se busca sin importar el encabezado `Vary` (sin esto, los módulos JavaScript importados sin red podían no encontrarse aunque estuvieran guardados).
+- En la app de Android los plugins de la comunidad todavía se cargan del sitio publicado (necesitan internet).
+
 ## Versión 1.3.9: transcribir sin internet de verdad
 
 - **Arreglo:** sin conexión no se podía transcribir aunque la app abriera. El service worker dejaba fuera todo lo que está en `models/`, incluido el modelo de notas (Basic Pitch) y su motor WebAssembly, que no forman parte de los paquetes descargables. Ahora, al instalarse, guarda la app completa (`precache.json`: código, fuente musical, modelo de notas y motor) y los modelos chicos se guardan también al usarse. Probado en el navegador sin red: abre, «Rápida» transcribe y «Fiel» transcribe (después de haber bajado una vez sus modelos de separación con internet).

@@ -6,8 +6,9 @@
 // 2) Sin internet: al instalarse guarda la app entera (precache.json: código, fuente musical, modelo de notas
 //    y su motor WebAssembly), así se puede abrir y transcribir sin conexión aunque nunca se haya usado el
 //    transcriptor con internet. Los modelos grandes de separación (Demucs, MDX, ONNX Runtime, Beat This!) se
-//    guardan aparte al bajarlos (no se duplican aquí).
-const VERSION = "mf-sw-2";
+//    guardan aparte al bajarlos (no se duplican aquí). Los plugins se guardan al usarse, o todos de una vez
+//    desde Sonido y estudio → Plugins sin internet (src/player/offlinePlugins.ts).
+const VERSION = "mf-sw-3";
 const SHELL = `${VERSION}-app`;
 
 self.addEventListener("install", (e) => {
@@ -19,7 +20,7 @@ self.addEventListener("install", (e) => {
       // de a pocos: si uno falla, los demás se guardan igual
       for (let i = 0; i < list.length; i += 6) await Promise.all(list.slice(i, i + 6).map(async (f) => {
         const u = new URL(f, self.registration.scope).href;
-        if (await cache.match(u)) return;
+        if (await cache.match(u, { ignoreVary: true })) return;
         try { const r = await fetch(u, { cache: "no-cache" }); if (r.ok) await cache.put(u, r); } catch { /* se guardará al usarse */ }
       }));
     } catch { /* sin lista (desarrollo): se guarda lo que se vaya usando */ }
@@ -53,7 +54,7 @@ self.addEventListener("fetch", (e) => {
     const cache = await caches.open(SHELL);
     if (hashed) {
       // Archivos con huella en el nombre: nunca cambian; primero lo guardado.
-      const hit = await cache.match(req);
+      const hit = await cache.match(req, { ignoreVary: true });
       if (hit) return isolate(hit);
       const res = await fetch(req);
       if (res.ok) cache.put(req, res.clone());
@@ -62,10 +63,10 @@ self.addEventListener("fetch", (e) => {
     // Páginas y lo demás: primero la red (para tener siempre la versión nueva); sin red, lo guardado.
     try {
       const res = await fetch(req);
-      if (res.ok && (nav || /\.(html|webmanifest|png|svg|woff2?|sf3|ogg|json|bin|wasm|otf)$/.test(url.pathname))) cache.put(req, res.clone());
+      if (res.ok && (nav || url.pathname.includes("/wam/") || /\.(html|webmanifest|png|svg|woff2?|sf3|ogg|json|bin|wasm|otf)$/.test(url.pathname))) cache.put(req, res.clone());
       return isolate(res);
     } catch (err) {
-      const hit = await cache.match(req, { ignoreSearch: nav });
+      const hit = await cache.match(req, { ignoreSearch: nav, ignoreVary: true });
       if (hit) return isolate(hit);
       if (nav) { const home = await cache.match(new URL("./", self.registration.scope).href); if (home) return isolate(home); }
       throw err;
