@@ -188,17 +188,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     }
     // Pulso y compás con Beat This! (opcional): en «Fiel» se baja (41 MB, una vez); en «Rápida», solo si ya
     // está guardado. Si no se puede, se sigue con el detector propio.
-    let beat: WorkerIn["beat"];
-    if (mode === "mix" && c.prefs.trBeatAI) {
-      try {
-        const ready = useSep || ((await hasPack(BEAT_PACKS.weights)) && (await hasPack(BEAT_PACKS.graph)) && (await hasPack(SEP_PACKS.ort)));
-        if (ready) {
-          const dl = (p: Pack) => downloadPack(p, (pct) => { status.textContent = `Descargando Beat This! (pulso y compás, una sola vez)… ${Math.round(pct)} %`; }).then((b) => b.slice().buffer);
-          const graph = await dl(BEAT_PACKS.graph), weights = await dl(BEAT_PACKS.weights);
-          if (weights.byteLength === BEAT_WEIGHT_BYTES) beat = { graph, weights, ort: useSep ? undefined : await dl(SEP_PACKS.ort) };
-        }
-      } catch { beat = undefined; }
-    }
+    const beat = mode === "mix" ? await beatPacks(useSep, !!useSep) : undefined;
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
     const msg: WorkerIn = { L, R, modelUrl: modelUrl(), stemModelUrl: stemModelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, beat, hint: mode === "mix" ? readHint() : undefined };
@@ -209,6 +199,18 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       void run();
     } : undefined);
   }
+  /** Beat This! (pulso y compás, opcional en preferencias): `download` lo baja si falta (41 MB, una vez);
+   *  si no, solo se usa si ya está guardado. `withSepOrt`: el motor ONNX ya viaja con la separación. */
+  const beatPacks = async (download: boolean, withSepOrt: boolean): Promise<WorkerIn["beat"]> => {
+    if (!c.prefs.trBeatAI) return undefined;
+    try {
+      const ready = download || ((await hasPack(BEAT_PACKS.weights)) && (await hasPack(BEAT_PACKS.graph)) && (withSepOrt || (await hasPack(SEP_PACKS.ort))));
+      if (!ready) return undefined;
+      const dl = (p: Pack) => downloadPack(p, (pct) => { status.textContent = `Descargando Beat This! (pulso y compás, una sola vez)… ${Math.round(pct)} %`; }).then((b) => b.slice().buffer);
+      const graph = await dl(BEAT_PACKS.graph), weights = await dl(BEAT_PACKS.weights);
+      return weights.byteLength === BEAT_WEIGHT_BYTES ? { graph, weights, ort: withSepOrt ? undefined : await dl(SEP_PACKS.ort) } : undefined;
+    } catch { return undefined; }
+  };
   const modelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
   const stemModelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "stems.art.json" : "stems.json"}`, document.baseURI).href;
   let watch = 0;
@@ -300,8 +302,10 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       const t = title.value.trim() && title.value !== "Transcripción" ? title.value.trim() : stemRows[0].f.name.replace(/[-_ ]*(vocals?|drums?|bass|guitar|piano|other|voz|bajo|bateria|batería)\.[^.]+$|\.[^.]+$/i, "") || "Pistas";
       const opts: TranscribeOpts = { mode: "mix", separate: false, presets: {}, drums: !!got.drums, sensitivity: Number(sens.value) / 100, markDoubtful: mark.checked, title: t };
       const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
-      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), stemModelUrl: stemModelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, hint: { ...extra, ...Object.fromEntries(Object.entries(readHint()).filter(([, v]) => v !== undefined)), ...(extra.guitars && !(readHint().guitars! >= 2) ? { guitars: extra.guitars } : {}), ...(extra.keys && !(readHint().keys! >= 2) ? { keys: extra.keys } : {}) }, userStems: got, otherMixed };
-      launch(msg, [L.buffer, R.buffer, ...Object.values(got).flatMap((x) => [x![0].buffer, x![1].buffer])], opts);
+      // Pulso y compás con Beat This! también con pistas importadas (si está activado: se baja si falta).
+      const beat = await beatPacks(true, false);
+      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), stemModelUrl: stemModelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, beat, hint: { ...extra, ...Object.fromEntries(Object.entries(readHint()).filter(([, v]) => v !== undefined)), ...(extra.guitars && !(readHint().guitars! >= 2) ? { guitars: extra.guitars } : {}), ...(extra.keys && !(readHint().keys! >= 2) ? { keys: extra.keys } : {}) }, userStems: got, otherMixed };
+      launch(msg, [L.buffer, R.buffer, ...Object.values(got).flatMap((x) => [x![0].buffer, x![1].buffer]), ...(beat ? [beat.graph, beat.weights, beat.ort].filter((b): b is ArrayBuffer => !!b) : [])], opts);
     } catch (e) { busy(false); stemGo.disabled = false; status.textContent = `No pude leer las pistas: ${(e as Error).message}`; }
   }
   // MIDI hecho en otro lado (NeuralNote/MuScriptor en tu computadora, un teclado, otra app): MusicFees
