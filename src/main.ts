@@ -42,7 +42,7 @@ const savePrefs = () => { try { localStorage.setItem("mf:prefs", JSON.stringify(
 const app = $("#app");
 const btnTracks = h("button", { class: "tab tracks", "aria-label": "Pistas y mezclador" }, "Tracks", h("span", { class: "dot" }));
 const btnSets = h("button", { class: "tab sets", "aria-label": "Ajustes de canción y pista" }, "Sets");
-const btnLogo = h("button", { class: "logo", "aria-label": "Menú de MusicFees" }, h("img", { src: "./icons/icon-192.png", alt: "MusicFees" }));
+const btnLogo = h("button", { class: "logo", "aria-label": "Menú de MusicFees" }, h("img", { class: "mk-green", src: "./icons/mark-green.svg", alt: "" }), h("img", { class: "mk-cream", src: "./icons/mark-cream.svg", alt: "" }), h("span", { class: "wordmark" }, "MusicFees"));
 const titleEl = h("span", { class: "title" }, "Sin título");
 const syncEl = h("span", { class: "sync" }, "");
 const btnSave = h("button", { class: "savebtn", title: "Guardar ahora (Ctrl + S)", onclick: () => void saveNow() }, "✓ Guardado");
@@ -53,7 +53,7 @@ const loadingEl = h("div", { class: "loading" }, "Cargando partitura…");
 const scoreWrap = h("main", { id: "scoreWrap", "aria-label": "Partitura" }, scoreEl, cursorEl, loadingEl);
 const ctxStrip = h("div", { class: "ctxstrip", "aria-label": "Cuerdas" });
 const tools = h("footer", { class: "tools" });
-const paletteHost = h("div", { style: "position:relative;z-index:5;flex:none;height:0" });
+const paletteHost = h("div", { class: "palettehost", style: "position:relative;z-index:5;flex:none;height:0" });
 // Barra del modo propuesta: siempre visible mientras se propone, para enviar o descartar.
 const propText = h("span", null, "");
 const propBar = h("div", { class: "propbar", role: "status", hidden: true }, propText,

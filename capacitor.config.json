@@ -2,5 +2,12 @@
   "appId": "io.github.artistab25.musicfees",
   "appName": "MusicFees",
   "webDir": "dist",
-  "android": { "allowMixedContent": false }
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css"
+    }
+  }
 }

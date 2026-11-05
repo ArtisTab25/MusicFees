@@ -23,6 +23,12 @@
   --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
   --f-music: "Noto Music", "Bravura Text", "Segoe UI Symbol", serif;
   color-scheme: dark;
+  /* Zonas seguras (muesca, barra de estado): en Android, WebView < 140 da env() = 0 y Capacitor 8
+     inyecta --safe-area-inset-*; se toma el mayor de los dos para no quedar debajo de la barra. */
+  --sat: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --sab: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --sal: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --sar: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -31,7 +37,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; touch-action: manipulation; }
 [hidden] { display: none !important; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-#app { height: 100dvh; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+#app { height: 100dvh; display: flex; flex-direction: column; padding-top: var(--sat); padding-bottom: var(--sab); padding-left: var(--sal); padding-right: var(--sar); }
 
 /* Barra superior: Tracks · logo · Sets */
 .top { flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; background: var(--green); height: 56px; border-radius: 0 0 14px 14px; position: relative; z-index: 6; }
@@ -149,11 +155,11 @@ body.compact .tools .r2, body.compact .tools .r3 { display: none; }
 
 /* Hojas: Tracks, Sets, menú, diálogos */
 .sheet { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: rgba(10, 11, 15, .55); }
-.sheet .card { margin-top: calc(56px + env(safe-area-inset-top, 0px)); flex: 1; min-height: 0; background: var(--tool); border-top: 2px solid var(--brand-l); display: flex; flex-direction: column; }
+.sheet .card { margin-top: calc(56px + var(--sat)); flex: 1; min-height: 0; background: var(--tool); border-top: 2px solid var(--brand-l); display: flex; flex-direction: column; }
 .sheet.left .card { margin-right: 0; }
 .sheet header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #22232c; }
 .sheet header h2 { margin: 0; font-family: var(--f-cond); font-size: 22px; font-weight: 800; letter-spacing: .02em; flex: 1; }
-.sheet .body { overflow: auto; padding: 12px; flex: 1; display: flex; flex-direction: column; gap: 14px; padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+.sheet .body { overflow: auto; padding: 12px; flex: 1; display: flex; flex-direction: column; gap: 14px; padding-bottom: calc(20px + var(--sab)); }
 .tabs2 { display: grid; grid-template-columns: 1fr 1fr; background: #23242d; }
 .tabs2 button { border: 0; background: transparent; height: 40px; font-weight: 700; letter-spacing: .06em; color: var(--muted-d); }
 .tabs2 button[aria-pressed="true"] { background: #5a7fd6; color: #fff; }
@@ -216,7 +222,7 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .note { font-size: 12.5px; color: var(--muted-d); line-height: 1.45; }
 
 .sheet.gate { background: var(--bg); }
-.sheet.gate .card { margin-top: env(safe-area-inset-top, 0px); }
+.sheet.gate .card { margin-top: var(--sat); }
 .login { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
 .login-logo { width: 72px; height: 72px; border-radius: 14px; background: var(--cream); padding: 6px; }
 .knobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; margin: 6px 0 10px; }
@@ -237,7 +243,7 @@ textarea { height: auto; padding: 10px; line-height: 1.5; }
 .plugcard h2 { margin: 0; flex: 1; font-family: var(--f-cond); font-size: 20px; }
 .plugbody { overflow: auto; background: #111; color: #eee; }
 #plug-add { height: 38px; background: #1d1e26; border: 1px solid var(--line); border-radius: 7px; width: 100%; }
-#toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(64px + env(safe-area-inset-top, 0px)); z-index: 40; max-width: min(520px, calc(100% - 24px)); background: #f5f6fa; color: #15161c; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 500; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+#toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(64px + var(--sat)); z-index: 40; max-width: min(520px, calc(100% - 24px)); background: #f5f6fa; color: #15161c; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 500; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
 #toast.err { background: var(--amber); }
 #kbd { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; font-size: 16px; caret-color: transparent; }
 
@@ -499,3 +505,114 @@ body.contrast .chordpill small { color: #000; }
 .partrow label span { display: flex; flex-direction: column; font-weight: 600; }
 .partrow label small { color: var(--muted-d); font-weight: 400; font-size: 12px; }
 .partrow select { width: 100%; }
+
+/* ======================================================================
+   1.4: marca renovada y escritorio con distribución tipo Guitar Pro 7.
+   Teléfono: la misma barra de siempre, con la marca nueva en la pestaña crema.
+   Escritorio (≥ 1024 px de ancho y ≥ 560 px de alto): barra superior con la marca, el transporte y
+   la «pantalla LCD» al centro; paleta de edición fija a la izquierda; la partitura como hoja sobre
+   un escritorio gris; Tracks y Sets como paneles que no tapan la hoja con una cortina.
+   ====================================================================== */
+:root {
+  --green: #24701f;
+  --green-2: #2f8a2a;
+  --green-d: #1b5418;
+  --lcd: #0c140c;
+  --lcd-ink: #9be38a;
+  --lcd-dim: #5f8f56;
+  --desk: #464a51;
+  --top-h: 56px;
+}
+.top { background: linear-gradient(180deg, var(--green-2), var(--green)); }
+.top .logo { position: relative; }
+.top .logo img { width: 44px; height: 44px; }
+.top .logo .mk-cream, .top .logo .wordmark { display: none; }
+.homebtn.main { background: linear-gradient(180deg, var(--green-2), var(--green)); border-color: var(--green-2); }
+
+@media (min-width: 1024px) and (min-height: 560px) {
+  :root { --top-h: 56px; --side-w: 252px; }
+  #app {
+    display: grid;
+    grid-template-columns: var(--side-w) minmax(0, 1fr) auto auto;
+    grid-template-rows: var(--top-h) auto auto auto auto auto minmax(0, 1fr) auto auto;
+  }
+  /* Fondo de la barra superior y de la paleta (los contenedores originales se «disuelven» en la rejilla) */
+  #app::before { content: ""; grid-area: 1 / 1 / 2 / -1; background: linear-gradient(180deg, #2a2d33, #212328); border-bottom: 2px solid var(--green-2); z-index: 0; }
+  #app::after { content: ""; grid-area: 4 / 1 / 8 / 2; background: #23262b; border-right: 1px solid #15171a; z-index: 0; }
+  .top, .tools { display: contents; }
+  .top { height: auto; border-radius: 0; box-shadow: none; background: none; }
+
+  /* Marca: azulejo verde con la nota crema y el nombre */
+  .top .logo { grid-area: 1 / 1; z-index: 1; width: auto; height: var(--top-h); margin: 0; padding: 0 16px; background: transparent; border-radius: 0; box-shadow: none; display: flex; align-items: center; gap: 10px; justify-content: flex-start; }
+  .top .logo .mk-green { display: none; }
+  .top .logo .mk-cream { display: block; width: 38px; height: 38px; padding: 4px; border-radius: 9px; background: linear-gradient(160deg, var(--green-2), var(--green-d)); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .top .logo .wordmark { display: block; font-family: var(--f-cond); font-weight: 800; font-size: 23px; letter-spacing: .01em; color: #eef1e9; }
+  .top .logo:hover .mk-cream { filter: brightness(1.12); }
+
+  /* Tracks y Sets: un par de botones a la derecha */
+  .top .tab { z-index: 1; align-self: center; height: 36px; margin: 0; font-size: 18px; padding: 0 14px; border: 1px solid #3a3e46; }
+  .top .tab.tracks { grid-area: 1 / 3; border-radius: 8px 0 0 8px; background: #30343b; color: #e4e7ee; }
+  .top .tab.sets { grid-area: 1 / 4; margin-right: 12px; border-radius: 0 8px 8px 0; border-left: 0; background: #30343b; color: #e4e7ee; }
+  .top .tab:hover { background: #3a3f47; }
+
+  /* Transporte y pantalla LCD al centro de la barra */
+  .tools .transport { grid-area: 1 / 2; z-index: 1; background: transparent; padding: 0 12px; justify-content: center; gap: 6px; align-self: center; }
+  .transport .play { width: 40px; height: 40px; border-width: 2px; border-color: #cfd3dc; }
+  .transport .play:hover { background: rgba(255,255,255,.08); }
+  .transport .skip svg { width: 24px; height: 24px; }
+  .transport .chip { flex: 0 1 520px; height: 44px; margin-left: 8px; background: var(--lcd); border: 1px solid #1f3a1c; border-left: 4px solid var(--red); border-radius: 6px; box-shadow: inset 0 0 18px rgba(80, 200, 70, .08), 0 1px 0 rgba(255,255,255,.05); }
+  .transport .chip .nm { color: var(--lcd-ink); font-size: 17px; text-shadow: 0 0 8px rgba(155, 227, 138, .35); }
+  .transport .chip .meta { color: var(--lcd-dim); }
+  .transport .chip .meta .ok { color: var(--lcd-ink); }
+  .transport .tbtn.tempo { height: 44px; background: var(--lcd); border: 1px solid #1f3a1c; color: var(--lcd-ink); border-radius: 6px; }
+
+  /* Franjas de aviso y título de la canción */
+  .propbar { grid-area: 2 / 1 / 3 / -1; }
+  .songline { grid-area: 3 / 1 / 4 / -1; background: #1b1d21; border-bottom: 1px solid #111316; padding: 4px 16px; min-height: 30px; }
+
+  /* Paleta de edición a la izquierda (lo que en el teléfono son las filas de abajo) */
+  .tools .r1, .tools .r2, .tools .r3 { z-index: 1; flex-wrap: wrap; overflow: visible; align-content: flex-start; padding: 12px 14px; gap: 6px; border-top: 0; }
+  .tools .r1 { grid-area: 4 / 1; }
+  .tools .r2 { grid-area: 5 / 1; border-top: 1px solid #30333a; }
+  .tools .r3 { grid-area: 6 / 1; border-top: 1px solid #30333a; }
+  .tools .r1::before, .tools .r2::before, .tools .r3::before { flex: 0 0 100%; font-size: 12px; font-weight: 600; color: var(--muted-d); margin-bottom: 2px; }
+  .tools .r1::before { content: "Escritura"; }
+  .tools .r2::before { content: "Vista y edición"; }
+  .tools .r3::before { content: "Reproducción"; }
+  .tools .row + .row { border-top: 1px solid #30333a; }
+  .tools .r1 .greens { margin-left: 0; flex: 0 0 auto; }
+  .tools .r3 .readout { flex: 0 0 100%; justify-content: flex-start; }
+  body.pad-on .tools .r2, body.pad-on .tools .r3, body.typing .tools .r2, body.typing .tools .r3, body.compact .tools .r2, body.compact .tools .r3 { display: flex; }
+  .tbtn.more { display: none; }
+
+  /* La partitura: hoja blanca sobre el escritorio */
+  #scoreWrap { grid-area: 4 / 2 / 8 / -1; background: var(--desk); background-image: radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px); background-size: 18px 18px; }
+  #score { max-width: 1180px; margin: 24px auto 40px; min-height: calc(100% - 64px); box-shadow: 0 2px 4px rgba(0,0,0,.25), 0 18px 48px rgba(0,0,0,.35); border-radius: 2px; }
+
+  /* Cuerdas / teclas y teclado propio: abajo, a todo lo ancho */
+  .tools .ctxstrip { grid-area: 8 / 1 / 9 / -1; z-index: 1; background: #1e2024; border-top: 1px solid #111316; padding: 8px 14px; }
+  .tools .pad { grid-area: 9 / 1 / 10 / -1; z-index: 1; width: auto; max-width: none; border-right: 0; border-top: 1px solid #111316; }
+  body.pad-on .tools .pad { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 6px 16px; padding: 8px 14px; }
+  .palette { width: min(720px, 100%); }
+  .palettehost { grid-area: 8 / 2 / 9 / -1; }
+
+  /* Hojas: debajo de la barra; Tracks y Sets son paneles laterales sin cortina */
+  .sheet .card { margin-top: calc(var(--top-h) + var(--sat)); }
+  .sheet.left, .sheet.right { background: transparent; pointer-events: none; }
+  .sheet.left .card, .sheet.right .card { pointer-events: auto; flex: none; height: calc(100% - var(--top-h) - var(--sat)); width: 420px; max-width: 420px; border-radius: 0; box-shadow: 0 0 0 1px #111316, 0 12px 40px rgba(0,0,0,.45); }
+  .sheet.left .card { margin-right: auto; }
+  .sheet.right .card { margin-left: auto; }
+  .sheet.full .card { max-width: 920px; border-radius: 14px 14px 0 0; }
+  .sheet.home .card, .sheet.gate .card { margin-top: var(--sat); }
+  #toast { top: calc(var(--top-h) + 10px + var(--sat)); }
+}
+/* Logo en inicio y acceso: el ícono ya trae su azulejo */
+.login-logo, .homehead .login-logo { background: none; padding: 0; border-radius: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+@media (min-width: 1024px) and (min-height: 560px) {
+  #score { max-width: min(1180px, calc(100% - 48px)); }
+  .sheet.home .card { max-width: 980px; }
+  .homegrid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .homebtn { min-height: 88px; padding: 14px 16px; }
+
+}
+.tabs2 button[aria-pressed="true"] { background: var(--green-2); color: #fff; }

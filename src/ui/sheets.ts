@@ -905,7 +905,7 @@ export class Sheets {
         big("♫", "Mis canciones", "Biblioteca, carpetas y muestras", () => this.library()),
         big("+", "Nueva canción", "Por estilo: rock, corrido, cumbia…", () => this.newSong()),
         big("✦", "Transcribir audio", "De una grabación a pistas con tablatura", () => void this.transcribe(), "accent"),
-        big("⇪", "Importar", "Guitar Pro, MusicXML", () => this.importDialog()),
+        big("⇪", "Importar", "Guitar Pro, MusicXML, PDF", () => this.importDialog()),
         big("⚙", "Preferencias", "Vista, sonido, accesibilidad", () => this.prefsSheet()),
         big("?", "Ayuda", "Atajos de teclado", () => this.help()),
         big("§", "Avisos legales", "Términos, privacidad y licencias", () => this.about("avisos")),
