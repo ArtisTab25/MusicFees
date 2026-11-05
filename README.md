@@ -47,6 +47,12 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.3: la transcripción ya no se pierde
+
+- **Se guarda en cuanto termina:** si «Crear la canción» falla por memoria o el teléfono cierra la página, en Transcribir audio aparece «Última transcripción → Abrir resultado» para crearla sin volver a esperar.
+- En el teléfono se suelta el audio decodificado (cientos de MB en una canción completa) antes de armar la partitura.
+- **Comprobación al crear:** si una parte con notas (p. ej. la batería) llega a la partitura casi vacía, la app lo avisa y guarda el detalle; «Descargar datos de la transcripción» entrega un .json con el que se puede reproducir exactamente la falla.
+
 ## Versión 1.4.2: auditoría de uso real, bucle de la selección y escritorio tipo Guitar Pro
 
 - **Reproducir la selección:** con compases o notas seleccionados, ▶ toca solo esa parte y se detiene al final. Con **⟲ Repetir** (nuevo botón junto a ▶, o Ctrl + L) la repite en bucle, para estudiar por compases. Sin selección suena toda la canción. La pantalla del transporte muestra «⟲ 3–5» mientras haya una parte elegida.

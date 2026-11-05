@@ -9,6 +9,7 @@ import { CHORDS, voicings } from "../score/chords";
 import { TUNINGS } from "../score/instruments";
 import { ARTIFACT } from "../config";
 import { downloadPack, hasPack } from "../player/downloads";
+import { delDoc, getDoc, putDoc } from "../collab/vault";
 import { BEAT_PACKS, BEAT_WEIGHT_BYTES, DEMUCS_WEIGHT_BYTES, SEP_PACKS, sepPlan, threadsFor } from "./packs";
 import type { Pack } from "../player/downloads";
 import { buildScore, ROLE_NAMES, suggestPreset, summarize } from "./build";
@@ -85,6 +86,17 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       status.textContent = `Listo: ${n || "audio"} · ${fmtTime(dur)}${dur > MAX_SECONDS ? ` (se usan los primeros ${MAX_SECONDS / 60} min)` : ""}.`;
     } catch (e) { pcm = null; go.disabled = true; status.textContent = `No pude leer ese archivo (${(e as Error).message}). Prueba con MP3, WAV, M4A u OGG.`; }
   }
+  // Última transcripción guardada (por si crear la canción falló o el teléfono cerró la página)
+  const lastBox = h("div", { class: "sec", hidden: true });
+  void loadLast().then((l) => {
+    if (!l) return;
+    lastBox.hidden = false;
+    lastBox.append(h("h3", null, "Última transcripción"),
+      h("p", { class: "note" }, `${l.opts.title} · ${new Date(l.at).toLocaleString()} · ${l.analysis.notes} notas. Ábrela para crear la canción sin volver a transcribir.`),
+      h("div", { class: "inline" },
+        h("button", { class: "primary", onclick: () => result(sheets, c, l.analysis, l.opts, l.took) }, "Abrir resultado"),
+        h("button", { class: "ghost", onclick: () => { void delDoc(LAST); lastBox.hidden = true; } }, "Descartar")));
+  });
   // Opciones
   let mode: "mix" | "solo" = "mix";
   const modeBtns = h("div", { class: "menu-tabs", role: "group", "aria-label": "Qué tiene la grabación" },
@@ -228,7 +240,17 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       if (m.type !== "progress") clearInterval(watch);
       if (m.type === "progress") { bar.value = m.pct; status.textContent = m.msg; if (m.pct >= 60) separating = false; }
       else if (m.type === "error") { busy(false); worker?.terminate(); worker = null; status.textContent = `No se pudo transcribir: ${m.message}`; }
-      else { busy(false); worker?.terminate(); worker = null; const mins = m.ms / 60000; result(sheets, c, m.analysis, opts, `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("pistas") ? "pistas separadas por ti" : m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`); }
+      else {
+        busy(false); worker?.terminate(); worker = null;
+        const mins = m.ms / 60000;
+        const took = `${mins >= 1.5 ? `${Math.round(mins)} min` : `${Math.round(m.ms / 1000)} s`} · ${m.backend.includes("pistas") ? "pistas separadas por ti" : m.backend.includes("webgpu") ? "separado con la tarjeta gráfica" : m.backend.includes("+") ? "separado con WebAssembly" : m.backend === "webgl" ? "aceleración gráfica" : m.backend === "wasm" ? "WebAssembly" : "procesador"}`;
+        // Se guarda ya: si crear la canción falla (memoria) o el teléfono cierra la página, no se pierde
+        // la transcripción (se reabre desde Transcribir audio → Última transcripción).
+        void saveLast({ analysis: m.analysis, opts, took, at: Date.now(), backend: m.backend, ua: navigator.userAgent });
+        // En el teléfono se suelta el audio decodificado (cientos de MB en una canción completa) antes de armar la partitura.
+        if (matchMedia("(pointer: coarse)").matches) { pcm = null; go.disabled = true; }
+        result(sheets, c, m.analysis, opts, took);
+      }
     };
     worker.onerror = (e) => { clearInterval(watch); if (onStall && separating) { stall(); return; } busy(false); status.textContent = `No se pudo transcribir: ${e.message || "error del proceso"}`; };
     worker.postMessage(msg, transfer);
@@ -323,6 +345,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
   } });
   sheets.panel("Transcribir audio", "full",
     h("p", { class: "note" }, "Convierte una canción, una pista o una grabación en una canción de MusicFees: una pista por parte, con su instrumento, en tablatura y partitura, con tempo, compás, tonalidad, acordes, secciones y análisis."),
+    lastBox,
     h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, filePick(file, "Elegir audio"), recBtn), status),
     trim,
     h("div", { class: "sec" }, h("h3", null, "Qué tiene la grabación"), modeBtns, soloField, drumsRow),
@@ -343,6 +366,24 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("p", { class: "note" }, "Transcribe solo música propia o que tengas derecho a usar."));
 }
 
+const LAST = "__last_transcription__";
+interface LastTr { analysis: Analysis; opts: TranscribeOpts; took: string; at: number; backend?: string; ua?: string; lost?: string }
+async function saveLast(v: Omit<LastTr, "lost"> | null, lost?: string) {
+  try {
+    if (v) { await putDoc(LAST, JSON.stringify(v)); return; }
+    const cur = await loadLast();
+    if (cur) await putDoc(LAST, JSON.stringify({ ...cur, lost }));
+  } catch { /* sin espacio: se sigue sin copia */ }
+}
+async function loadLast(): Promise<LastTr | null> {
+  try { const j = await getDoc(LAST); return j ? JSON.parse(j) as LastTr : null; } catch { return null; }
+}
+function countNotes(t: { staves: { bars: { voices: { beats: { notes: unknown[] }[] }[] }[] }[] } | undefined) {
+  let n = 0;
+  for (const b of t?.staves[0]?.bars ?? []) for (const v of b.voices) for (const be of v.beats) n += be.notes.length;
+  return n;
+}
+
 function result(sheets: Sheets, c: AppCtx, a: Analysis, opts: TranscribeOpts, took: string) {
   const parts = a.parts.filter((p) => p.notes.length);
   const rows = parts.map((p) => {
@@ -359,9 +400,16 @@ function result(sheets: Sheets, c: AppCtx, a: Analysis, opts: TranscribeOpts, to
     create.disabled = true; create.textContent = "Creando…";
     try {
       const score = buildScore({ ...a, parts: keep.map((r) => r.p) }, { ...opts, presets, drums: keep.some((r) => r.p.role === "drums") });
+      // Comprobación: cada parte con notas debe llegar a su pista con notas (si no, se avisa y se guarda el detalle).
+      const lost = keep.map((r, i) => ({ r, n: countNotes(score.tracks[i]) })).filter(({ r, n }) => r.p.notes.length >= 20 && n < r.p.notes.length * 0.2);
       sheets.close();
       await c.addSong(score);
-      c.toast(`✓ «${score.title}»: ${score.tracks.length} pistas, ${score.masterBars.length} compases. Revisa los compases con 💬.`);
+      if (lost.length) {
+        const d = lost.map(({ r, n }) => `${r.p.name ?? ROLE_NAMES[r.p.role]}: ${r.p.notes.length} notas → ${n} en la partitura (${r.sel.value})`).join("; ");
+        console.warn("[MusicFees] notas perdidas al crear la canción:", d);
+        void saveLast(null, d);
+        c.toast(`⚠ Se perdieron notas al crear la canción (${d}). Envía a Claude los datos: Transcribir audio → Última transcripción → Descargar datos.`, true);
+      } else c.toast(`✓ «${score.title}»: ${score.tracks.length} pistas, ${score.masterBars.length} compases. Revisa los compases con 💬.`);
     } catch (e) { create.disabled = false; create.textContent = "Crear la canción"; c.toast(`No se pudo crear: ${(e as Error).message}`, true); }
   } }, "Crear la canción");
   sheets.panel("Transcripción lista", "full",
@@ -369,7 +417,13 @@ function result(sheets: Sheets, c: AppCtx, a: Analysis, opts: TranscribeOpts, to
     report(summarize(a, "audio")),
     h("div", { class: "sec" }, h("h3", null, "Pistas e instrumentos"), ...rows.map((r) => r.el),
       h("p", { class: "note" }, "La guitarra y el bajo salen en tablatura con la digitación más cómoda (y afinación Drop D o más grave si hace falta). Puedes elegir cualquier instrumento para cada parte.")),
-    h("div", { class: "inline" }, create, h("button", { class: "ghost", onclick: () => transcribeSheet(sheets, c) }, "Otra grabación")));
+    h("div", { class: "inline" }, create, h("button", { class: "ghost", onclick: () => transcribeSheet(sheets, c) }, "Otra grabación")),
+    h("p", { class: "note" }, "La transcripción queda guardada en este dispositivo hasta la siguiente: si crear la canción falla, ábrela otra vez desde Transcribir audio sin esperar de nuevo."),
+    h("button", { class: "linkbtn", onclick: async () => {
+      const raw = await getDoc(LAST);
+      const { download } = await import("../export/exporters");
+      await download(raw ?? JSON.stringify({ analysis: a, opts, took }), `transcripcion-${(opts.title || "musicfees").replace(/[^\w-]+/g, "_").slice(0, 40)}.json`, "application/json");
+    } }, "Descargar datos de la transcripción (para revisar fallas)"));
 }
 
 // ---------- reporte ----------
