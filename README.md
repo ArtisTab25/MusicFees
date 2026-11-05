@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.0: escritorio estilo Guitar Pro, logo nuevo y examen con grabaciones reales
+
+- **Escritorio (≥ 1024 px):** distribución tipo Guitar Pro 7. Barra superior con la marca, el transporte y una «pantalla LCD» verde al centro (pista, compás, tiempo, tempo); Tracks y Sets a la derecha; herramientas como paleta fija a la izquierda (Escritura, Vista y edición, Reproducción); la partitura como hoja sobre un escritorio gris; Tracks y Sets como paneles laterales que no tapan la hoja. En el teléfono, la misma distribución de siempre.
+- **Logo** redibujado en vector (nota con ondas, verde y crema); íconos de app, favicon y lanzador de Android.
+- **Android 15+:** la app se dibuja debajo de la barra de estado; ahora toma el alto real de la barra (env() o las variables que inyecta Capacitor) para que la parte superior de las ventanas no quede tapada.
+- **Examen con grabaciones reales** (46 canciones de bandas, tablaturas alineadas nota por nota): la app acierta 18,7 % de las notas de guitarra/teclado y 34,7 % del bajo (contra 33–37 % y 51–70 % en audio exportado de Guitar Pro). El modelo de notas afinado en la 1.3.8 con audio de Guitar Pro **empeoraba** con grabaciones reales (18,7 → 17,2 %), así que se vuelve al Basic Pitch original. MuScriptor small (no incluido; licencia no comercial) da 30,1 % de notas, 41,1 % de bajo y 61,7 % de duraciones correctas en las mismas grabaciones.
+
 ## Versión 1.3.10: plugins sin internet
 
 - **Sonido y estudio → Plugins sin internet:** descarga de una vez todos los plugins (520 archivos, 49 MB) al almacén de la app; después funcionan sin conexión. Los que ya se usaron con internet también quedan guardados solos. Probado sin red en el navegador: los 520 archivos se sirven y los 27 módulos de plugin cargan.

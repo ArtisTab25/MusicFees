@@ -913,7 +913,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.3.10 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.4.0 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 

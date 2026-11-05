@@ -191,7 +191,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     const beat = mode === "mix" ? await beatPacks(useSep, !!useSep) : undefined;
     const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
     const prefer = (c.prefs.mlBackend as string | undefined) || undefined;
-    const msg: WorkerIn = { L, R, modelUrl: modelUrl(), stemModelUrl: stemModelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, beat, hint: mode === "mix" ? readHint() : undefined };
+    const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer, mode, drums: opts.drums, sensitivity: opts.sensitivity, sep, beat, hint: mode === "mix" ? readHint() : undefined };
     launch(msg, [L.buffer, R.buffer, ...(sep ? [sep.ort, sep.drums, sep.vocals, sep.bass, sep.demucs?.graph, sep.demucs?.weights].filter((b): b is ArrayBuffer => !!b) : []), ...(beat ? [beat.graph, beat.weights, beat.ort].filter((b): b is ArrayBuffer => !!b) : [])], opts, sep?.demucs ? () => {
       // Demucs no avanzó (memoria del teléfono): se recuerda y se repite con MDX-Net.
       c.prefs.noDemucs = true; c.savePrefs(); void drawQ();
@@ -212,7 +212,6 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     } catch { return undefined; }
   };
   const modelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "model.art.json" : "model.json"}`, document.baseURI).href;
-  const stemModelUrl = () => new URL(`${import.meta.env.BASE_URL}models/basic-pitch/${ARTIFACT ? "stems.art.json" : "stems.json"}`, document.baseURI).href;
   let watch = 0;
   function launch(msg: WorkerIn, transfer: Transferable[], opts: TranscribeOpts, onStall?: () => void) {
     worker?.terminate();
@@ -304,7 +303,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
       const wasmUrl = new URL(`${import.meta.env.BASE_URL}models/tfjs-wasm/`, document.baseURI).href;
       // Pulso y compás con Beat This! también con pistas importadas (si está activado: se baja si falta).
       const beat = await beatPacks(true, false);
-      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), stemModelUrl: stemModelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, beat, hint: { ...extra, ...Object.fromEntries(Object.entries(readHint()).filter(([, v]) => v !== undefined)), ...(extra.guitars && !(readHint().guitars! >= 2) ? { guitars: extra.guitars } : {}), ...(extra.keys && !(readHint().keys! >= 2) ? { keys: extra.keys } : {}) }, userStems: got, otherMixed };
+      const msg: WorkerIn = { L, R, modelUrl: modelUrl(), wasmUrl, prefer: (c.prefs.mlBackend as string | undefined) || undefined, mode: "mix", drums: !!got.drums, sensitivity: opts.sensitivity, beat, hint: { ...extra, ...Object.fromEntries(Object.entries(readHint()).filter(([, v]) => v !== undefined)), ...(extra.guitars && !(readHint().guitars! >= 2) ? { guitars: extra.guitars } : {}), ...(extra.keys && !(readHint().keys! >= 2) ? { keys: extra.keys } : {}) }, userStems: got, otherMixed };
       launch(msg, [L.buffer, R.buffer, ...Object.values(got).flatMap((x) => [x![0].buffer, x![1].buffer]), ...(beat ? [beat.graph, beat.weights, beat.ort].filter((b): b is ArrayBuffer => !!b) : [])], opts);
     } catch (e) { busy(false); stemGo.disabled = false; status.textContent = `No pude leer las pistas: ${(e as Error).message}`; }
   }
