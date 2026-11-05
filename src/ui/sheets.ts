@@ -21,7 +21,7 @@ import { mergeTargets, planMerge, planSplitPitch, planSplitVoices, subScore, use
 import { CHORDS, NOTE_NAMES, diagramSvg, keysVoicing, pcName, voicings, G6, type NameSys } from "../score/chords";
 import { KEY_HELP } from "../editor/keys";
 import { exportAudio, exportGp, exportMidi, exportPdf, importFile } from "../export/exporters";
-import { h, icon, onLongPress } from "./dom";
+import { filePick, h, icon, onLongPress } from "./dom";
 import { ARTIFACT } from "../config";
 import LEGAL from "../legal.json";
 import type { Bank } from "../player/banks";
@@ -241,7 +241,8 @@ export class Sheets {
         ? `❄ Congeladas: ${[...fr].map((t) => ed.score.tracks[t]?.name ?? t + 1).join(", ")}. Suenan desde su audio ya procesado; el teléfono solo calcula las demás. Si editas una congelada, vuelve a sonar en vivo sola.`
         : "Congelar procesa una vez cada pista con todos sus efectos (como grabarla) y la toca como audio: suena igual y casi no gasta procesador. Ideal con muchas pistas y cadenas de efectos. Tarda un poco al congelar."),
       h("div", { class: "inline", style: "flex-wrap:wrap" },
-        h("button", { class: "primary", disabled: this.c.freezing || n < 2, onclick: go(others) }, `Congelar todas menos «${ed.track.name}»`),
+        // Con una sola pista «todas menos esta» no congela nada: no se muestra.
+        n > 1 ? h("button", { class: "primary", disabled: this.c.freezing, onclick: go(others) }, `Congelar todas menos «${ed.track.name}»`) : null,
         h("button", { class: "ghost", disabled: this.c.freezing, onclick: go(ed.score.tracks.map((t) => t.index)) }, "Congelar todas"),
         fr.size ? h("button", { class: "ghost", onclick: () => { this.c.unfreeze(); this.close(); this.c.toast("Todas las pistas suenan en vivo otra vez."); } }, "Descongelar") : null));
   }
@@ -966,7 +967,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.4.1 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.4.2 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 
@@ -1363,7 +1364,7 @@ export class Sheets {
         this.c.toast(`Importé «${score.title}»: ${score.tracks.length} pistas, ${score.masterBars.length} compases.${note}`);
       } catch (e) { this.c.toast(`No pude leer ese archivo: ${(e as Error).message}`, true); }
     };
-    this.open("Importar archivo", "full", input,
+    this.open("Importar archivo", "full", filePick(input, "Elegir archivo"),
       h("p", { class: "note" }, "Se agrega a tu biblioteca como canción nueva y se abre. Formatos: Guitar Pro 3 a 8 (.gp3 .gp4 .gp5 .gpx .gp), MusicXML, alphaTex y tablaturas en PDF (exportadas de un programa, no escaneadas: el ritmo queda aproximado)."));
   }
   /** Exportar: toda la canción, solo una pista o solo unos compases (la selección o una sección). */

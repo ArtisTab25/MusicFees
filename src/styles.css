@@ -622,3 +622,106 @@ body.contrast .chordpill small { color: #000; }
 .sheet header .backbtn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet header .backbtn:hover { background: var(--btn); }
 @media (max-width: 420px) { .sheet header .backbtn span { display: none; } .sheet header .backbtn { padding: 0 8px; } }
+
+/* ======================================================================
+   1.4.2: auditoría de uso real.
+   - Un solo color de marca: lo elegido va en verde (antes azul); el cursor de edición conserva su
+     azul propio para distinguirse de la selección (ámbar).
+   - Teléfono: una sola fila de herramientas de todos los días; lo demás en «⋯ Más herramientas».
+     Botones de al menos 40×44 px.
+   - Escritorio estilo Guitar Pro 7: paleta lateral que se abre y cierra, y las pistas acopladas abajo.
+   ====================================================================== */
+:root { --blue: #2f8a2a; --cursor: #3b82f6; }
+#cursor { border-color: var(--cursor); background: rgba(59, 130, 246, .16); }
+.at-cursor-bar { background: rgba(59, 130, 246, .12); }
+.linkbtn { color: #8fd47f; }
+.progress { color: var(--lcd-ink); }
+.help-table td:first-child { color: var(--lcd-ink); }
+.listbtn.bank[aria-pressed="true"], .style-grid button[aria-pressed="true"] { background: #1f3a1c; border-color: var(--green-2); }
+.greens .tbtn[aria-pressed="true"] { background: var(--cream); color: var(--green-d); }
+.greens .tbtn[aria-pressed="true"] svg { fill: var(--green-d); }
+.tbtn.more { background: var(--btn); color: var(--ink-d); box-shadow: -10px 0 10px var(--tool); }
+body.more .tbtn.more { background: var(--green-2); color: #fff; }
+/* Repetir (bucle) en el transporte, junto a reproducir */
+.transport .skip { min-width: 44px; min-height: 44px; display: grid; place-items: center; border-radius: 50%; }
+.transport .loopbtn svg { fill: #fff; }
+.transport .loopbtn[aria-pressed="true"] { background: var(--green-2); box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+.chip .meta .rng { color: var(--amber); font-weight: 700; }
+/* Selector de archivo en español */
+.vh { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; padding: 0; margin: -1px; }
+.filepick { display: inline-flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%; cursor: pointer; }
+.filepick .fbtn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 42px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--btn); font-weight: 600; }
+.filepick .fbtn svg { fill: currentColor; }
+.filepick:hover .fbtn { background: var(--btn-h); }
+.filepick:has(input:focus-visible) .fbtn { outline: 3px solid #ffd166; outline-offset: 2px; }
+.filepick:has(input:disabled) { opacity: .45; cursor: default; }
+.filepick .fname { font-size: 13px; color: var(--muted-d); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Pistas acopladas y botón de paleta: solo en escritorio */
+.trackdock, .sidebtn { display: none; }
+
+@media (max-width: 899px) {
+  .tools .r1 { overflow: visible; }
+  .tools .r1 .x { display: none; }
+  body.more .tools .r1 .x { display: inline-flex; }
+  body.more .tools .r1 .tbtn.secnav.x { display: inline-block; }
+  .tools .r2, .tools .r3 { display: none; }
+  body.more .tools .r2, body.more .tools .r3 { display: flex !important; flex-wrap: wrap; }
+  body.more .tools .r1::before, body.more .tools .r2::before, body.more .tools .r3::before { flex: 0 0 100%; font-size: 11px; font-weight: 600; color: var(--muted-d); }
+  body.more .tools .r1::before { content: "Escritura"; }
+  body.more .tools .r2::before { content: "Vista"; }
+  body.more .tools .r3::before { content: "Reproducción"; }
+  .tbtn { height: 44px; min-width: 40px; }
+  .seg button { height: 44px; min-width: 40px; }
+  .sbtn { height: 40px; min-width: 48px; }
+  .greens { margin-left: auto; padding: 3px; gap: 4px; }
+  .greens .tbtn { height: 38px; width: 40px; min-width: 40px; }
+  .tbtn.more { position: static; box-shadow: none; }
+  .ibtn { width: 42px; height: 42px; }
+  .palette { max-height: 42vh; }
+  /* Los avisos salen sobre las herramientas, no encima del título de la canción */
+  #toast { top: auto; bottom: calc(var(--tools-h, 220px) + 10px); }
+}
+
+@media (min-width: 1024px) and (min-height: 560px) {
+  #app { grid-template-rows: var(--top-h) auto auto auto auto auto minmax(0, 1fr) auto auto auto; }
+  .tools .ctxstrip { grid-area: 9 / 1 / 10 / -1; }
+  .tools .pad { grid-area: 10 / 1 / 11 / -1; }
+  .palettehost { grid-area: 7 / 2 / 8 / -1; align-self: end; }
+  .top .tab.tracks[aria-pressed="true"] { background: var(--green); border-color: var(--green-2); color: #fff; }
+  /* Paleta de edición plegable (como en Guitar Pro: se muestra u oculta, la hoja se agranda) */
+  .sidebtn { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 26px; padding: 0 10px; margin-left: -6px; border: 1px solid #3a3e46; border-radius: 13px; background: #2a2d33; color: var(--ink-d); font-size: 12px; font-weight: 600; }
+  .sidebtn svg { fill: currentColor; }
+  .sidebtn[aria-pressed="true"] { background: #1f3a1c; border-color: var(--green-2); color: #b9f0a4; }
+  body.side-off #scoreWrap { grid-area: 4 / 1 / 8 / -1; }
+  body.side-off .tools .r1, body.side-off .tools .r2, body.side-off .tools .r3, body.side-off #app::after { display: none; }
+  /* Pistas acopladas abajo */
+  body.dock-on .trackdock { display: flex; grid-area: 8 / 1 / 9 / -1; z-index: 1; flex-direction: column; min-height: 0; max-height: 200px; background: #1e2024; border-top: 2px solid var(--green-2); }
+  .dock-head { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid #111316; }
+  .dock-head b { font-family: var(--f-cond); font-size: 17px; }
+  .dock-head .tbtn { height: 32px; }
+  .dock-hint { color: var(--muted-d); font-size: 12px; margin-right: auto; }
+  .dock-list { overflow: auto; min-height: 0; }
+  .dock-row { display: grid; grid-template-columns: 5px minmax(180px, 280px) 36px 36px minmax(140px, 240px) minmax(100px, 160px) 36px; align-items: center; gap: 8px; padding: 3px 12px 3px 0; border-bottom: 1px solid #26292e; }
+  .dock-row.on { background: #23331f; }
+  .dock-row .stripe { width: 5px; height: 34px; border-radius: 0 3px 3px 0; }
+  .dock-row .ibtn { width: 36px; height: 36px; }
+  .dock-name { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 40px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink-d); text-align: left; }
+  .dock-name:hover { background: rgba(255,255,255,.05); }
+  .dock-name svg { fill: #cfd3df; flex: none; }
+  .dock-name span { display: flex; flex-direction: column; min-width: 0; }
+  .dock-name b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock-name small { font-size: 11.5px; color: var(--muted-d); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock-row.on .dock-name b { color: #b9f0a4; }
+  .dock-fader { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .dock-fader small { color: var(--muted-d); font-size: 11px; width: 24px; }
+  .dock-fader input { width: 100%; min-width: 0; }
+}
+@media (max-width: 480px) {
+  .transport { gap: 6px; padding: 6px 8px 8px; }
+  .transport .skip { min-width: 40px; }
+  .transport .skip svg { width: 24px; height: 24px; }
+  .transport .play { width: 44px; height: 44px; }
+  .transport .tbtn.tempo { padding: 0 8px; font-size: 13px; }
+  .chip { padding: 3px 8px; }
+  .chip .nm { font-size: 17px; }
+}

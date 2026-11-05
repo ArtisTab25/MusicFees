@@ -117,10 +117,26 @@ export class Engine {
     // Las posiciones (boundsLookup) llegan con «postRenderFinished», no con «renderFinished»: usar el
     // primero dibujaba el cursor y acomodaba el zoom con las posiciones del dibujo anterior.
     this.api.postRenderFinished.on(() => this.emit("rendered"));
+    // alphaTab 1.8.4 falla al agrandar el ancho (paleta lateral oculta, ventana más ancha) en la ruta de
+    // «resizeRender» del worker («previousContainer … topEffects» de null). Con un dibujo completo no pasa.
+    {
+      const api = this.api as unknown as { triggerResize: () => void; container: { isVisible: boolean; width: number }; settings: unknown; _renderer?: { width: number; updateSettings(s: unknown): void }; render(): void };
+      const orig = api.triggerResize.bind(api);
+      api.triggerResize = () => {
+        if (!api.container.isVisible || !api._renderer) { orig(); return; }
+        api._renderer.updateSettings(api.settings);
+        api._renderer.width = api.container.width;
+        api.render();
+      };
+    }
     this.api.playerPositionChanged.on((e) => {
       // Bucle de una parte con el motor de estudio: alphaTab no lo aplica ahí, se salta a mano.
       const r = this.range;
-      if (r && this.fx && this.playing && (e.currentTick >= r.to - 2 || e.currentTick < r.from - 960)) this.jumpTick(r.from);
+      // Sin bucle, la parte elegida se toca una vez y se detiene al final.
+      if (r && this.fx && this.playing && (e.currentTick >= r.to - 2 || e.currentTick < r.from - 960)) {
+        if (!this.api.isLooping && e.currentTick >= r.to - 2) this.api.pause();
+        this.jumpTick(r.from);
+      }
       this.emit("position", e.currentTime, e.endTime, e.currentTick);
     });
     this.api.playerStateChanged.on((e) => {
@@ -320,11 +336,25 @@ export class Engine {
   stop() { this.api.stop(); }
   set speed(v: number) { this.api.playbackSpeed = v; }
   get speed() { return this.api.playbackSpeed; }
-  set loop(v: boolean) { this.api.isLooping = v; if (!v) this.loopBars(null); }
+  /** Repetir: con una parte elegida (selección o sección) repite esa parte; sin ella, toda la canción. */
+  set loop(v: boolean) { this.api.isLooping = v; if (!v && this.range?.kind === "bars") this.loopBars(null); }
   get loop() { return this.api.isLooping; }
-  /** Parte que se repite en bucle (ticks), o null para toda la canción. */
-  private range: { from: number; to: number; s: number; e: number } | null = null;
-  get loopRange() { return this.range ? { s: this.range.s, e: this.range.e } : null; }
+  /** Parte que suena (ticks): «bars» = bucle de compases (secciones); «sel» = la selección del editor
+   *  (suena solo esa parte; con Repetir, en bucle). null = toda la canción. */
+  private range: { from: number; to: number; s: number; e: number; kind: "bars" | "sel"; calc?: () => { from: number; to: number } | null } | null = null;
+  get loopRange() { return this.range ? { s: this.range.s, e: this.range.e, kind: this.range.kind } : null; }
+  /** Toca solo la parte [from, to) que devuelve `calc` (se recalcula si la canción cambia). s/e: compases, para mostrarlos. */
+  playRange(calc: () => { from: number; to: number } | null, s: number, e: number, restart = true) {
+    const t = calc();
+    if (!t || t.to <= t.from) { this.clearRange(); return; }
+    this.range = { ...t, s, e, kind: "sel", calc };
+    this.applyRange();
+    let cur = this.lastTick;
+    try { cur = this.api.tickPosition; } catch { /* sin reproductor */ }
+    if (restart || cur < t.from || cur >= t.to) this.jumpTick(t.from);
+  }
+  /** Quita la parte elegida (vuelve a sonar toda la canción). */
+  clearRange() { if (this.range) this.loopBars(null); }
   /** Repite en bucle los compases s..e (null = quitar). Empieza a tocar desde s. */
   loopBars(r: { s: number; e: number } | null) {
     const score = this.api.score;
@@ -337,7 +367,7 @@ export class Engine {
     const from = mbs[r.s]?.start ?? 0;
     const last = mbs[Math.min(r.e, mbs.length - 1)];
     const to = last.start + last.calculateDuration();
-    this.range = { from, to, s: r.s, e: r.e };
+    this.range = { from, to, s: r.s, e: r.e, kind: "bars" };
     this.api.isLooping = true;
     this.applyRange();
     this.jumpTick(from);
@@ -348,8 +378,8 @@ export class Engine {
     if (!r || !score) return;
     const mbs = score.masterBars;
     if (r.s >= mbs.length) { this.range = null; return; }
-    const last = mbs[Math.min(r.e, mbs.length - 1)];
-    r.from = mbs[r.s].start; r.to = last.start + last.calculateDuration();
+    if (r.calc) { const t = r.calc(); if (!t || t.to <= t.from) { this.range = null; try { this.api.playbackRange = null; } catch { /* nada */ } return; } r.from = t.from; r.to = t.to; }
+    else { const last = mbs[Math.min(r.e, mbs.length - 1)]; r.from = mbs[r.s].start; r.to = last.start + last.calculateDuration(); }
     const pr = new at.synth.PlaybackRange();
     pr.startTick = r.from; pr.endTick = r.to;
     try { this.api.playbackRange = pr; } catch { /* sin reproductor */ }

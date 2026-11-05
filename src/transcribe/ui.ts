@@ -2,7 +2,7 @@
 // Se carga solo cuando se usa (el modelo de notas y TensorFlow.js viven en su propio worker).
 import { parseMidi, midiToAnalysis } from "./midifile";
 import type { AppCtx, Sheets } from "../ui/sheets";
-import { h } from "../ui/dom";
+import { filePick, h } from "../ui/dom";
 import { PRESETS } from "../score/instruments";
 import { analysisOf, kindOf, type Op, type SongAnalysis } from "../score/model";
 import { CHORDS, voicings } from "../score/chords";
@@ -323,7 +323,7 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
   } });
   sheets.panel("Transcribir audio", "full",
     h("p", { class: "note" }, "Convierte una canción, una pista o una grabación en una canción de MusicFees: una pista por parte, con su instrumento, en tablatura y partitura, con tempo, compás, tonalidad, acordes, secciones y análisis."),
-    h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, file, recBtn), status),
+    h("div", { class: "sec" }, h("h3", null, "Audio"), h("div", { class: "inline" }, filePick(file, "Elegir audio"), recBtn), status),
     trim,
     h("div", { class: "sec" }, h("h3", null, "Qué tiene la grabación"), modeBtns, soloField, drumsRow),
     h("div", { class: "sec" }, h("h3", null, "Calidad"), qBtns, qNote, h("label", { class: "inline" }, aiBeat, "Pulso y compás con red neuronal (Beat This!, experimental)"), aiNote),
@@ -336,10 +336,10 @@ export function transcribeSheet(sheets: Sheets, c: AppCtx) {
     h("p", { class: "note" }, "Cómo funciona: en calidad «Fiel», Demucs v4 (Meta, MIT) separa voz, bajo, guitarra, piano y lo demás, y MDX-Net (KUIELab, MIT) la batería (en trozos de 3,9 s para gastar poca memoria; en equipos con poca memoria, o si la separación se atasca, MDX-Net separa voz, batería y bajo). «Fiel (rápida)» usa la misma separación con menos solapamiento entre trozos y sin el segundo separador de batería. Con varios núcleos y sin internet: tras la primera descarga, todo funciona fuera de línea; un modelo de reconocimiento de notas (Basic Pitch de Spotify, Apache-2.0) escucha cada fuente; los algoritmos propios de MusicFees reparten guitarras y teclados por timbre y tocabilidad, leen la batería pieza por pieza, encuentran pulso, compás, tonalidad, acordes, estructura y contrapunto, y eligen la digitación más cómoda. Es un borrador muy completo: revísalo y corrígelo en el editor."),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes las pistas separadas?"),
       h("p", { class: "note" }, "Si separaste la canción en otra app (Moises, BandLab Splitter, Ultimate Vocal Remover…), sube aquí sus pistas: voz, batería, bajo, guitarra, piano, lo demás. MusicFees transcribe cada una con su instrumento, sin volver a separar. Si una pista trae más de un instrumento (dos guitarras, piano y sinte, voz con coros, bajo con teclado…), marca «trae varios» o elige «Varios instrumentos mezclados»: así MusicFees reparte esas notas en varias pistas en vez de escribirlas como un solo instrumento."),
-      stemIn, stemList, stemGo),
+      filePick(stemIn, "Elegir pistas"), stemList, stemGo),
     h("div", { class: "sec" }, h("h3", null, "¿Ya tienes un MIDI?"),
       h("p", { class: "note" }, "Si transcribiste en tu computadora con NeuralNote (gratis, usa el modelo MuScriptor) u otra herramienta, importa aquí el MIDI: MusicFees lo convierte en pistas con tablatura, acordes, secciones y análisis."),
-      midiIn),
+      filePick(midiIn, "Elegir MIDI")),
     h("p", { class: "note" }, "Transcribe solo música propia o que tengas derecho a usar."));
 }
 

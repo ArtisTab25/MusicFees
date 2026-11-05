@@ -32,6 +32,9 @@ const P: Record<string, string> = {
   play: "M7 4v16l13-8z",
   pause: "M6 4h4v16H6zm8 0h4v16h-4z",
   prev: "M6 5h2v14H6zm3 7 10-7v14z",
+  dots: "M5 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+  sidebar: "M3 4h18v16H3zm2 2v12h5V6zm7 0v12h7V6z",
+  dock: "M3 4h18v16H3zm2 2v7h14V6zm0 9v3h14v-3z",
   back: "M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z",
   next: "M16 5h2v14h-2zM5 5l10 7-10 7z",
   home: "M12 3 2 12h3v8h5v-6h4v6h5v-8h3z",
@@ -76,6 +79,7 @@ export function icon(name: keyof typeof P | string, size = 22): SVGSVGElement {
   s.setAttribute("aria-hidden", "true");
   const p = document.createElementNS(ns, "path");
   p.setAttribute("d", P[name] ?? "");
+  if (name === "sidebar" || name === "dock") p.setAttribute("fill-rule", "evenodd");
   s.append(p);
   return s;
 }
@@ -95,4 +99,16 @@ export function onLongPress(el: HTMLElement, fn: (e: Event) => void, ms = 500) {
   // El toque que abrió el menú no debe además «tocar» el botón.
   el.addEventListener("click", (e) => { if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
   el.addEventListener("contextmenu", (e) => { e.preventDefault(); clearTimeout(timer); fn(e); });
+}
+
+/** Selector de archivo con texto propio en español (el del navegador dice «Choose File» según el idioma del sistema). */
+export function filePick(input: HTMLInputElement, label = "Elegir archivo"): HTMLLabelElement {
+  input.classList.add("vh");
+  const none = "Ningún archivo elegido";
+  const name = h("span", { class: "fname" }, none);
+  input.addEventListener("change", () => {
+    const fs = [...(input.files ?? [])];
+    name.textContent = fs.length ? (fs.length > 1 ? `${fs.length} archivos` : fs[0].name) : none;
+  });
+  return h("label", { class: "filepick" }, input, h("span", { class: "fbtn" }, icon("file", 18), label), name);
 }

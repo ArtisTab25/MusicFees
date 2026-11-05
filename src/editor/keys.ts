@@ -56,6 +56,8 @@ export const KEY_HELP: KeyHelp[] = [
 export interface KeyActions {
   play(): void; save(): void; menu(): void; help(): void; sections(): void; comments(): void;
   zoom(d: number): void; loop(): void; bar(d: number): void; track(d: number): void; edge(end: boolean): void;
+  /** Esc sin selección: cierra la paleta abierta. */
+  escape?(): void;
 }
 
 const FX: Record<string, NoteFx> = { h: "hammer", d: "slide", e: "bend", v: "vibrato", p: "palmMute", l: "letRing", x: "dead", g: "ghost", m: "harmonic", i: "staccato", u: "tie", a: "accent", "!": "heavyAccent" };
@@ -129,7 +131,7 @@ export class KeyInput {
     else if (mod && lk === "x") this.toast(this.ed.cutSel());
     else if (mod && lk === "v") this.toast(this.ed.paste());
     else if (mod && lk === "a") this.ed.selectBars(true);
-    else if (k === "Escape") this.ed.clearSelection();
+    else if (k === "Escape") { if (this.ed.sel || this.ed.selecting) this.ed.clearSelection(); else A?.escape?.(); }
     else if ((k === "Backspace" || k === "Delete") && this.ed.sel && this.ed.selectedCount > 1) this.ed.deleteSel();
     else if (k === "Backspace" || k === "Delete") this.ed.backspace();
     else if (k === "Enter") this.ed.gotoNextBar();

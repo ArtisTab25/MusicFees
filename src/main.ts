@@ -8,6 +8,7 @@ import { Cloud, LiveSession, clientId, loadLocalDoc, localList, rememberSong, sa
 import { ClaudeLibrary } from "./collab/claudeLib";
 import { addVersion, clearPending, markPending, pendingSince } from "./collab/vault";
 import { h, $, icon, onLongPress } from "./ui/dom";
+import { buildTrackDock } from "./ui/trackdock";
 import { ARTIFACT, NO_CLOUD_MSG, PUBLIC_URL } from "./config";
 import { Capacitor } from "@capacitor/core";
 import { buildPalettes } from "./ui/palettes";
@@ -45,6 +46,7 @@ const btnSets = h("button", { class: "tab sets", "aria-label": "Ajustes de canci
 const btnLogo = h("button", { class: "logo", "aria-label": "Menú de MusicFees" }, h("img", { class: "mk-green", src: "./icons/mark-green.svg", alt: "" }), h("img", { class: "mk-cream", src: "./icons/mark-cream.svg", alt: "" }), h("span", { class: "wordmark" }, "MusicFees"));
 const titleEl = h("span", { class: "title" }, "Sin título");
 const syncEl = h("span", { class: "sync" }, "");
+const btnSide = h("button", { class: "sidebtn", "aria-label": "Paleta de edición", "aria-pressed": "true" }, icon("sidebar", 18), h("span", null, "Paleta"));
 const btnSave = h("button", { class: "savebtn", title: "Guardar ahora (Ctrl + S)", onclick: () => void saveNow() }, "✓ Guardado");
 const peersEl = h("span", { class: "peerdot" });
 const scoreEl = h("div", { id: "score" });
@@ -61,10 +63,20 @@ const propBar = h("div", { class: "propbar", role: "status", hidden: true }, pro
 app.append(
   h("header", { class: "top" }, btnTracks, btnLogo, btnSets),
   propBar,
-  h("div", { class: "songline" }, titleEl, peersEl, syncEl, btnSave),
+  h("div", { class: "songline" }, btnSide, titleEl, peersEl, syncEl, btnSave),
   scoreWrap, paletteHost, tools,
 );
+// El crédito de alphaTab se queda (lo pide su autor), pero discreto. Los trozos del dibujo llegan
+// después del aviso de «dibujado» (se insertan al acercarse a la vista), por eso se vigila el DOM.
+new MutationObserver((ms) => {
+  for (const m of ms) for (const n of m.addedNodes) {
+    if (!(n instanceof Element) || !n.textContent?.includes("rendered by alphaTab")) continue;
+    for (const t of n.querySelectorAll("text")) if (t.textContent === "rendered by alphaTab") t.setAttribute("opacity", "0.3");
+  }
+}).observe(scoreEl, { childList: true, subtree: true });
 const toastEl = h("div", { id: "toast", role: "status", hidden: true });
+// El aviso sale sobre las herramientas (en el teléfono), no encima del título.
+new ResizeObserver(() => document.documentElement.style.setProperty("--tools-h", `${tools.offsetHeight}px`)).observe(tools);
 document.body.append(toastEl);
 let toastT = 0;
 export function toast(msg: string, err = false) {
@@ -181,36 +193,38 @@ const btnKbd = tb("keyboard", "Teclado del teléfono", () => {
 });
 // ▶ despliega todas las opciones: la fila de herramientas se acomoda en varias líneas y aparecen las
 // filas de zoom, deshacer, velocidad y metrónomo aunque el teclado esté abierto.
-const btnMore = h("button", { class: "tbtn more", "aria-label": "Más opciones", "aria-expanded": "false", title: "Más opciones", onclick: () => setMore(!document.body.classList.contains("more")) }, "▶");
+const btnMore = h("button", { class: "tbtn more", "aria-label": "Más herramientas", "aria-expanded": "false", title: "Más herramientas", onclick: () => setMore(!document.body.classList.contains("more")) }, icon("dots", 20));
 function setMore(on: boolean) {
   document.body.classList.toggle("more", on);
-  btnMore.textContent = on ? "◀" : "▶";
+  btnMore.replaceChildren(icon(on ? "chevronDown" : "dots", 20));
   btnMore.setAttribute("aria-expanded", String(on));
-  btnMore.setAttribute("aria-label", on ? "Menos opciones" : "Más opciones");
+  btnMore.setAttribute("aria-label", on ? "Menos herramientas" : "Más herramientas"); btnMore.title = btnMore.getAttribute("aria-label")!;
   PREFS.more = on; savePrefs();
   requestAnimationFrame(() => { drawCursor(); scrollToCursor(); });
 }
-const r1 = h("div", { class: "row r1" }, btnPad, btnKbd, voiceSeg, btnSection, btnComments, btnView, btnLyrics, btnChords, greens, btnMore);
-const btnCompact = tb("chevronDown", "Ocultar o mostrar filas", () => { document.body.classList.toggle("compact"); PREFS.compact = document.body.classList.contains("compact"); savePrefs(); });
+// En el teléfono la fila principal lleva solo lo de todos los días (deshacer, teclado, paletas);
+// lo demás (clase «x») aparece con ⋯ Más herramientas, junto con las filas de vista y reproducción.
+for (const b of [btnKbd, voiceSeg, btnSection, btnComments, btnView, btnLyrics, btnChords]) b.classList.add("x");
+const r1 = h("div", { class: "row r1" }, btnUndo, btnRedo, btnPad, btnKbd, voiceSeg, btnSection, btnComments, btnView, btnLyrics, btnChords, greens, btnMore);
 const r2 = h("div", { class: "row r2" },
   tb("home", "Ir al inicio", () => { ed.setCursor({ b: 0, i: 0 }); scoreWrap.scrollTo({ top: 0 }); }),
   btnLayout,
-  tb("zoomOut", "Alejar", () => setZoom(-0.1)), zoomVal, tb("zoomIn", "Acercar", () => setZoom(0.1)),
-  btnUndo, btnRedo, btnCompact);
+  tb("zoomOut", "Alejar", () => setZoom(-0.1)), zoomVal, tb("zoomIn", "Acercar", () => setZoom(0.1)));
 
 const btnCount = tb("countin", "Cuenta antes de tocar", () => { engine.countIn = engine.countIn > 0 ? 0 : 1; refresh(); });
-const btnLoop = tb("loop", "Repetir", () => { engine.loop = !engine.loop; refresh(); });
+const btnLoop = h("button", { class: "skip loopbtn", "aria-label": "Repetir (bucle)", title: "Repetir (Ctrl + L). Con una selección, repite solo esa parte.", onclick: () => toggleLoop() }, icon("loop", 24));
 const speedVal = h("span", { class: "zoomv" }, "100%");
 const btnMetro = tb("metro", "Metrónomo", () => { engine.metronome = engine.metronome > 0 ? 0 : 1; refresh(); });
 const readout = h("span", { class: "readout", "aria-live": "off" });
 // El tempo del cursor se toca para cambiarlo.
 const tempoBtn = h("button", { class: "tbtn tempo", title: "Cambiar el tempo", "aria-label": "Cambiar el tempo", onclick: () => sheets.tempo() });
-const r3 = h("div", { class: "row r3" }, btnCount, btnLoop,
+const r3 = h("div", { class: "row r3" }, btnCount,
   tb("down", "Más lento", () => setSpeed(-0.1)), speedVal, tb("up", "Más rápido", () => setSpeed(0.1)),
   btnMetro, readout);
 
 const playBtn = h("button", { class: "play", "aria-label": "Reproducir", onclick: () => {
   if (!engine.soundReady) { toast(soundPct < 100 ? `Los sonidos todavía cargan (${soundPct} %). Suena en cuanto terminen.` : "Preparando los sonidos de esta canción…"); pendingPlay = true; return; }
+  if (!engine.playing) applySelRange(true);
   engine.playPause();
 } }, icon("play", 26));
 let soundPct = 0, pendingPlay = false;
@@ -223,9 +237,8 @@ const transport = h("div", { class: "transport" },
   h("button", { class: "skip", "aria-label": "Compás anterior", onclick: () => jumpBar(-1) }, icon("prev", 28)),
   playBtn,
   h("button", { class: "skip", "aria-label": "Compás siguiente", onclick: () => jumpBar(1) }, icon("next", 28)),
-  chip, tempoBtn);
+  btnLoop, chip, tempoBtn);
 tools.append(ctxStrip, pad.el, r1, r2, r3, transport);
-if (PREFS.compact) document.body.classList.add("compact");
 if (PREFS.more) setMore(true);
 if (inputMode === "pad") showPad(true);
 // Tocar la barra o la partitura no debe quitarle el foco al campo oculto: en Android el toque
@@ -233,6 +246,46 @@ if (inputMode === "pad") showPad(true);
 for (const el of [tools, paletteHost, scoreWrap]) el.addEventListener("mousedown", (e) => {
   if (!(e.target as HTMLElement).closest("input,select,textarea")) e.preventDefault();
 });
+
+// ---------- reproducir la selección (y repetirla en bucle) ----------
+/** Ticks de la selección: de su primer tiempo al final del último (compases completos si es «todas las pistas»). */
+function selTicks(sel: NonNullable<typeof ed.sel>) {
+  const sc = engine.api.score ?? ed.score;
+  const a = sel.a.b < sel.z.b || (sel.a.b === sel.z.b && sel.a.i <= sel.z.i) ? sel.a : sel.z;
+  const z = a === sel.a ? sel.z : sel.a;
+  const mbs = sc.masterBars;
+  if (!mbs[a.b] || !mbs[z.b]) return null;
+  if (sel.all) return { from: mbs[a.b].start, to: mbs[z.b].start + mbs[z.b].calculateDuration() };
+  const bars = sc.tracks[sel.t]?.staves[0]?.bars;
+  const b0 = bars?.[a.b]?.voices[sel.v]?.beats[a.i], b1 = bars?.[z.b]?.voices[sel.v]?.beats[z.i];
+  if (!b0 || !b1) return { from: mbs[a.b].start, to: mbs[z.b].start + mbs[z.b].calculateDuration() };
+  return { from: b0.absolutePlaybackStart, to: b1.absolutePlaybackStart + b1.playbackDuration };
+}
+let selPlayKey = "";
+/** Con una selección, suena solo esa parte (con Repetir, en bucle); sin selección, la canción completa. */
+function applySelRange(restart: boolean) {
+  const sel = ed.sel;
+  if (sel && (ed.selectedCount > 1 || sel.a.b !== sel.z.b || sel.a.i !== sel.z.i)) {
+    const snap = { ...sel, a: { ...sel.a }, z: { ...sel.z } };
+    const s = Math.min(snap.a.b, snap.z.b), e = Math.max(snap.a.b, snap.z.b);
+    const key = JSON.stringify(snap);
+    engine.playRange(() => selTicks(snap), s, e, restart || key !== selPlayKey);
+    if (key !== selPlayKey) toast(`${engine.loop ? "⟲ Repitiendo" : "▶ Tocando"} solo la selección: compás ${s + 1}${e > s ? `–${e + 1}` : ""}.`);
+    selPlayKey = key;
+  } else if (engine.loopRange?.kind === "sel") { engine.clearRange(); selPlayKey = ""; }
+}
+function toggleLoop() {
+  // Un bucle de sección (desde Secciones) se quita aquí mismo.
+  if (engine.loop && engine.loopRange?.kind === "bars") { engine.loopBars(null); engine.loop = false; toast("Bucle quitado."); refresh(); return; }
+  engine.loop = !engine.loop;
+  selPlayKey = "";
+  if (engine.loop) {
+    applySelRange(!engine.playing);
+    const r = engine.loopRange;
+    if (!r) toast("⟲ Repetir: toda la canción. Selecciona compases o notas para repetir solo esa parte.");
+  } else toast(engine.loopRange ? "Repetir apagado: la selección suena una vez." : "Repetir apagado.");
+  refresh();
+}
 
 function setZoom(d: number) {
   const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((engine.api.settings.display.scale + d) * 10) / 10));
@@ -340,6 +393,12 @@ function togglePalette(id: string | null) {
   paletteHost.replaceChildren();
   for (const [k, b] of Object.entries(palBtns)) b.setAttribute("aria-pressed", String(k === openPal));
   if (openPal) paletteHost.append(palettes[openPal]());
+  // La partitura deja espacio abajo para poder ver (y elegir) las notas que la paleta taparía.
+  requestAnimationFrame(() => {
+    const ph = (paletteHost.firstElementChild as HTMLElement | null)?.offsetHeight ?? 0;
+    scoreWrap.style.paddingBottom = ph ? `${ph}px` : "";
+    if (ph) scrollToCursor();
+  });
 }
 
 // ---------- franja de contexto: cuerdas, teclado de piano o kit ----------
@@ -506,7 +565,9 @@ function drawCursor() {
   const c = ed.cursor;
   const box = off && ed.renderTracks().includes(c.t) ? beatBox(c.t, c.b, c.v, c.i, c.row) : null;
   if (!box || !off) { cursorEl.hidden = true; } else {
-    Object.assign(cursorEl.style, { left: `${off.x + box.x}px`, top: `${off.y + box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
+    // Mínimo 22 px: en el teléfono el cuadro de un tiempo corto casi no se veía.
+    const w = Math.max(22, box.w), hh = Math.max(22, box.h);
+    Object.assign(cursorEl.style, { left: `${off.x + box.x - (w - box.w) / 2}px`, top: `${off.y + box.y - (hh - box.h) / 2}px`, width: `${w}px`, height: `${hh}px` });
     cursorEl.classList.toggle("col", box.col);
     cursorEl.hidden = false;
   }
@@ -521,7 +582,10 @@ function drawCursor() {
 function scrollToCursor() {
   requestAnimationFrame(() => {
     if (cursorEl.hidden) return;
-    const r = cursorEl.getBoundingClientRect(), wr = scoreWrap.getBoundingClientRect();
+    const r = cursorEl.getBoundingClientRect(), wr0 = scoreWrap.getBoundingClientRect();
+    // Lo que tapa la paleta abierta no cuenta como visible.
+    const ph = (paletteHost.firstElementChild as HTMLElement | null)?.offsetHeight ?? 0;
+    const wr = { top: wr0.top, left: wr0.left, right: wr0.right, bottom: wr0.bottom - ph, height: wr0.height - ph, width: wr0.width };
     const behavior: ScrollBehavior = document.body.classList.contains("still") ? "auto" : "smooth";
     if (r.top < wr.top + 10 || r.bottom > wr.bottom - 10) scoreWrap.scrollBy({ top: r.top - wr.top - wr.height / 3, behavior });
     if (r.left < wr.left || r.right > wr.right) scoreWrap.scrollBy({ left: r.left - wr.left - wr.width / 3, behavior });
@@ -609,6 +673,7 @@ function refresh() {
     h("span", null, `${ed.cursor.b + 1}/${sc.masterBars.length}`),
     h("span", { class: engine.soundReady ? "ok" : "" }, `● ${mb.timeSignatureNumerator}:${mb.timeSignatureDenominator}`),
     h("span", null, timeText),
+    ...(engine.loopRange ? [h("span", { class: "rng" }, `${engine.loop ? "⟲" : "▶"} ${engine.loopRange.s + 1}${engine.loopRange.e > engine.loopRange.s ? `–${engine.loopRange.e + 1}` : ""}`)] : []),
     ...(Math.abs(gap) > 1 && ed.beat && !(ed.bar.voices[ed.cursor.v].beats.length === 1 && ed.beat.isEmpty) ? [h("span", { class: "gap", title: gap > 0 ? "Al compás le falta tiempo" : "Al compás le sobra tiempo" }, gap > 0 ? `falta ${gapText(gap)}` : `sobra ${gapText(-gap)}`)] : []),
   );
   const n = ed.noteAtCursor();
@@ -637,6 +702,10 @@ function refresh() {
   btnView.setAttribute("aria-pressed", String(ed.viewAll));
   btnCount.setAttribute("aria-pressed", String(engine.countIn > 0));
   btnLoop.setAttribute("aria-pressed", String(engine.loop));
+  {
+    const r = engine.loopRange;
+    btnLoop.setAttribute("aria-label", engine.loop ? (r ? `Repetir encendido: compás ${r.s + 1}${r.e > r.s ? `–${r.e + 1}` : ""}` : "Repetir encendido: toda la canción") : (ed.sel ? "Repetir la selección" : "Repetir (bucle)"));
+  }
   btnMetro.setAttribute("aria-pressed", String(engine.metronome > 0));
   {
     const used = ed.usedVoices();
@@ -648,6 +717,7 @@ function refresh() {
     }
   }
   btnTracks.classList.toggle("live", !!live && live.others.length > 0);
+  if (document.body.classList.contains("dock-on")) dock.update();
   renderCtx();
   // La barra de selección vive en el teclado propio: se muestra sola mientras haya selección.
   if ((ed.sel || ed.selecting) && !document.body.classList.contains("pad-on")) { showPad(true); padAuto = true; }
@@ -693,7 +763,31 @@ engine.on("beat", (b) => {
   }
 });
 ed.onChange(() => { refresh(); scrollToCursor(); sendCursorSoon(); if (!engine.playing) { const b = ed.beat; if (b) engine.seekBeat(b); } });
-btnTracks.onclick = () => sheets.tracks();
+// ---------- escritorio tipo Guitar Pro: paleta lateral plegable y pistas acopladas abajo ----------
+const desk = matchMedia("(min-width: 1024px) and (min-height: 560px)");
+const dock = buildTrackDock({
+  ed, engine, ops: (o) => ed.commit(o), mixer: () => sheets.tracks(), trackMenu: (i) => sheets.trackMenu(i),
+  close: () => setDock(false), frozen: () => frozenInfo?.tracks ?? [],
+});
+app.append(dock.el);
+function setDock(on: boolean) {
+  document.body.classList.toggle("dock-on", on);
+  btnTracks.setAttribute("aria-pressed", String(on));
+  PREFS.dock = on; savePrefs();
+  if (on) dock.update(true);
+  requestAnimationFrame(() => { drawCursor(); scrollToCursor(); });
+}
+function setSide(on: boolean) {
+  document.body.classList.toggle("side-off", !on);
+  btnSide.setAttribute("aria-pressed", String(on));
+  btnSide.title = on ? "Ocultar la paleta de edición" : "Mostrar la paleta de edición";
+  PREFS.side = on; savePrefs();
+  requestAnimationFrame(() => drawCursor());
+}
+btnSide.onclick = () => setSide(document.body.classList.contains("side-off"));
+setSide(PREFS.side !== false);
+if (PREFS.dock !== false) setDock(true);
+btnTracks.onclick = () => (desk.matches ? setDock(!document.body.classList.contains("dock-on")) : sheets.tracks());
 btnSets.onclick = () => sheets.sets();
 btnLogo.onclick = () => sheets.menu();
 window.addEventListener("resize", () => drawCursor());
@@ -702,11 +796,13 @@ window.addEventListener("resize", () => drawCursor());
 let saveLocalT = 0, saveCloudT = 0;
 /** Dónde vive la canción abierta (cuando no hay nada pendiente). */
 function placeLabel() {
-  return isClaudeId(songId) ? "En tu biblioteca de Claude" : ARTIFACT ? "Solo en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : cloud.session ? `Biblioteca de ${cloud.session.username}` : "En la nube") : "Solo en este teléfono";
+  return isClaudeId(songId) ? "En tu biblioteca de Claude" : ARTIFACT ? "Solo en este navegador" : isCloud ? (live?.connected ? "En la nube · en vivo" : cloud.session ? `Biblioteca de ${cloud.session.username}` : "En la nube") : coarse || Capacitor.isNativePlatform() ? "Solo en este teléfono" : "Solo en esta computadora";
 }
 let savedAt = 0;
 function setSync(msg?: string, err = false) {
-  syncEl.textContent = msg ?? (savedAt ? `✓ Guardado · ${placeLabel()}` : placeLabel());
+  // El estado (guardado / sin guardar) lo muestra el botón; aquí solo dónde vive la canción.
+  syncEl.textContent = msg && msg !== "● Sin guardar" ? msg : placeLabel();
+  syncEl.title = savedAt ? `Guardada a las ${new Date(savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
   syncEl.classList.toggle("err", err);
   const dirty = msg === "● Sin guardar" || msg === "Guardando…";
   syncEl.classList.toggle("dirty", dirty);
@@ -944,13 +1040,8 @@ keys.actions = {
   sections: () => sheets.sectionsSheet(),
   comments: () => sheets.commentsSheet(),
   zoom: (d) => setZoom(d),
-  loop: () => {
-    if (engine.loopRange) { engine.loopBars(null); engine.loop = false; toast("Bucle quitado."); refresh(); return; }
-    const sel = ed.sel ? [ed.sel.a.b, ed.sel.z.b] : [ed.cursor.b, ed.cursor.b];
-    const r = { s: Math.min(...sel), e: Math.max(...sel) };
-    engine.loopBars(r); refresh();
-    toast(`Bucle: compás ${r.s + 1}${r.e > r.s ? `–${r.e + 1}` : ""}.`);
-  },
+  loop: () => toggleLoop(),
+  escape: () => { if (openPal) togglePalette(null); },
   bar: (d) => jumpBar(d),
   track: (d) => { const n = ed.score.tracks.length; ed.selectTrack((ed.cursor.t + d + n) % n); toast(`${ed.cursor.t + 1}. ${ed.track.name}`); },
   edge: (end) => { ed.setCursor({ b: end ? ed.score.masterBars.length - 1 : 0, i: 0 }); scrollToCursor(); },

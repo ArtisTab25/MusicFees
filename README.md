@@ -47,6 +47,15 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.2: auditoría de uso real, bucle de la selección y escritorio tipo Guitar Pro
+
+- **Reproducir la selección:** con compases o notas seleccionados, ▶ toca solo esa parte y se detiene al final. Con **⟲ Repetir** (nuevo botón junto a ▶, o Ctrl + L) la repite en bucle, para estudiar por compases. Sin selección suena toda la canción. La pantalla del transporte muestra «⟲ 3–5» mientras haya una parte elegida.
+- **Teléfono:** una sola fila de herramientas (deshacer, rehacer, teclado y las cuatro paletas); lo demás en **⋯ Más herramientas**, con rótulos Escritura / Vista / Reproducción. Botones de al menos 40×44 px. Los avisos salen sobre las herramientas, ya no encima del título.
+- **Paletas:** Esc las cierra y la partitura deja espacio para ver la nota que la paleta taparía.
+- **Escritorio:** la paleta lateral se oculta o muestra con «Paleta» (la hoja se agranda) y las **pistas quedan acopladas abajo** como en Guitar Pro 7: nombre, silencio, solo, volumen, paneo y opciones; «Tracks» las muestra u oculta y «Mezclador» abre el panel completo.
+- Un solo color de marca (lo elegido en verde), selector de archivos en español, «Solo en esta computadora» en PC, sin «Guardado» repetido, crédito de alphaTab discreto, cursor de edición más visible y «Congelar todas menos…» oculto cuando solo hay una pista.
+- Arreglo: al agrandar la zona de la partitura alphaTab 1.8.4 fallaba al redibujar (error «topEffects»); ahora se redibuja completo.
+
 ## Versión 1.4.1: botón «Atrás» en todas las ventanas
 
 - Cada ventana que abres desde otra trae **‹ Atrás** arriba a la izquierda (con el nombre de la ventana anterior en PC): regresa a donde estabas, con su contenido actualizado, en vez de cerrar todo.
