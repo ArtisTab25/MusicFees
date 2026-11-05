@@ -71,31 +71,84 @@ function presetOptions(sel?: string) {
 
 export class Sheets {
   private el: HTMLElement | null = null;
-  constructor(private c: AppCtx) {}
+  /** Ventanas anteriores (para «Atrás»): se guardan tal cual estaban (campos, desplazamiento). */
+  private stack: { el: HTMLElement; rebuild?: () => void }[] = [];
+  /** Ventana que se está construyendo ahora (la pone el envoltorio de abajo) y si se está regresando. */
+  private building: (() => void) | null = null;
+  private backing = false;
+  constructor(private c: AppCtx) {
+    // Las ventanas que muestran datos que cambian (pistas, ajustes, menú, inicio) se vuelven a armar al
+    // regresar a ellas; las demás se restauran como estaban (así no se pierde, por ejemplo, el audio elegido).
+    const REBUILD = new Set(["tracks", "sets", "menu", "home", "library", "sectionsSheet", "commentsSheet", "proposalsSheet", "banks", "versionsSheet", "trashSheet"]);
+    return new Proxy(this, {
+      get: (t, k, r) => {
+        const v = Reflect.get(t, k, r);
+        if (typeof v !== "function" || typeof k !== "string" || !REBUILD.has(k)) return v;
+        return (...args: unknown[]) => {
+          const prev = t.building;
+          t.building = () => (r as Sheets)[k as "tracks"](...(args as []));
+          try {
+            const out = v.apply(r, args);
+            if (out instanceof Promise) return out.finally(() => { if (t.building && t.building !== prev) t.building = prev; });
+            t.building = prev;
+            return out;
+          } catch (e) { t.building = prev; throw e; }
+        };
+      },
+    });
+  }
 
   /** Mientras estás en Inicio, cerrar una ventana te regresa a Inicio (no a una hoja vacía). */
   private homeMode = false;
-  leaveHome() { if (this.homeMode) { this.homeMode = false; this.el?.remove(); this.el = null; } }
+  leaveHome() { if (this.homeMode) { this.homeMode = false; this.el?.remove(); this.el = null; this.stack = []; } }
+  /** Regresa a la ventana anterior. */
+  back() {
+    const prev = this.stack.pop();
+    if (!prev) { this.close(); return; }
+    this.el?.remove(); this.el = null;
+    if (prev.rebuild) {
+      this.backing = true;
+      try { prev.rebuild(); } catch { this.el = null; } finally { this.backing = false; }
+      if (this.el) return;
+    }
+    this.el = prev.el;
+    document.body.append(prev.el);
+    const h2 = prev.el.querySelector("h2") as HTMLElement | null;
+    requestAnimationFrame(() => h2?.focus({ preventScroll: true }));
+    this.c.refresh();
+  }
   close() {
+    this.stack = [];
     if (this.homeMode && !this.el?.classList.contains("home")) { this.home(); return; }
     this.el?.remove(); this.el = null; this.c.refresh();
     const r = this.returnFocus; this.returnFocus = null;
     if (r && r.isConnected && r.id !== "kbd") r.focus({ preventScroll: true });
   }
   private open(title: string, side: "left" | "right" | "full" | "gate", ...content: (HTMLElement | null)[]) {
-    this.el?.remove();
+    // Abrir una ventana desde otra la guarda para poder regresar (salvo que sea la misma ventana
+    // redibujándose, o que se esté regresando).
+    const prevEl = this.el;
+    if (prevEl && !this.backing && side !== "gate") {
+      const same = prevEl.getAttribute("aria-label") === title;
+      if (!same) { this.stack.push({ el: prevEl, rebuild: (prevEl as HTMLElement & { _rebuild?: () => void })._rebuild }); if (this.stack.length > 12) this.stack.shift(); }
+    }
+    if (side === "gate") this.stack = [];
+    prevEl?.remove();
     this.c.keys.blur();
     const body = h("div", { class: "body" }, ...content);
     const closable = side !== "gate";
+    const prevTitle = this.stack.length ? this.stack[this.stack.length - 1].el.getAttribute("aria-label") ?? "" : "";
+    const backBtn = this.stack.length ? h("button", { class: "backbtn", "aria-label": `Atrás: ${prevTitle}`, title: `Regresar a ${prevTitle} (Esc)`, onclick: () => this.back() }, icon("back", 18), h("span", null, prevTitle === "MusicFees" ? "Menú" : prevTitle)) : null;
     const card = h("div", { class: "card" },
-      h("header", null, h("h2", null, title), closable ? h("button", { class: "ibtn", "aria-label": "Cerrar", onclick: () => this.close() }, icon("close", 20)) : null),
+      h("header", null, backBtn, h("h2", null, title), closable ? h("button", { class: "ibtn", "aria-label": "Cerrar todo", title: "Cerrar", onclick: () => this.close() }, icon("close", 20)) : null),
       body);
     this.el = h("div", { class: `sheet ${side === "gate" ? "full gate" : side}`, role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e: Event) => { if (closable && e.target === this.el) this.close(); } }, card);
+    if (this.building) (this.el as HTMLElement & { _rebuild?: () => void })._rebuild = this.building;
     // Teclado: Esc cierra, Tab da vueltas dentro de la hoja y el foco empieza en el título
     // (no en un campo: en el teléfono eso abriría el teclado sin pedirlo).
     const sheet = this.el;
     sheet.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (e.key === "Escape" && closable) { e.preventDefault(); this.close(); return; }
+      if (e.key === "Escape" && closable) { e.preventDefault(); if (this.stack.length) this.back(); else this.close(); return; }
       if (e.key !== "Tab") return;
       const f = [...sheet.querySelectorAll<HTMLElement>("button,input,select,textarea,a[href],[tabindex]:not([tabindex='-1'])")].filter((x) => !x.hasAttribute("disabled") && x.offsetParent !== null);
       if (!f.length) return;
@@ -913,7 +966,7 @@ export class Sheets {
         !claudeLib ? (cloud.session
           ? big("⎋", "Cerrar sesión", cloud.session.email, async () => { await this.c.unloadSong(); await cloud.logout(); this.homeMode = false; this.login(true); }, "quiet")
           : big("→", "Entrar", "Con Google o con tu correo", () => this.login(true), "quiet")) : null),
-      h("p", { class: "note center" }, "MusicFees 1.4.0 · gratis, sin anuncios"));
+      h("p", { class: "note center" }, "MusicFees 1.4.1 · gratis, sin anuncios"));
     this.el?.classList.add("home");
   }
 

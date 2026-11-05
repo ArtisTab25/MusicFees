@@ -47,6 +47,12 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.1: botón «Atrás» en todas las ventanas
+
+- Cada ventana que abres desde otra trae **‹ Atrás** arriba a la izquierda (con el nombre de la ventana anterior en PC): regresa a donde estabas, con su contenido actualizado, en vez de cerrar todo.
+- **Esc** también regresa un paso; la **X** cierra todo de golpe.
+- Funciona en menú → módulos (Sonido y estudio → Masterizado → atrás), pistas → opciones de pista, sets → biblioteca de plugins, inicio → preferencias, etc.
+
 ## Versión 1.4.0: escritorio estilo Guitar Pro, logo nuevo y examen con grabaciones reales
 
 - **Escritorio (≥ 1024 px):** distribución tipo Guitar Pro 7. Barra superior con la marca, el transporte y una «pantalla LCD» verde al centro (pista, compás, tiempo, tempo); Tracks y Sets a la derecha; herramientas como paleta fija a la izquierda (Escritura, Vista y edición, Reproducción); la partitura como hoja sobre un escritorio gris; Tracks y Sets como paneles laterales que no tapan la hoja. En el teléfono, la misma distribución de siempre.

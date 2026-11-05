@@ -616,3 +616,9 @@ body.contrast .chordpill small { color: #000; }
 
 }
 .tabs2 button[aria-pressed="true"] { background: var(--green-2); color: #fff; }
+/* Atrás: regresa a la ventana de la que se vino (Esc hace lo mismo); la X cierra todo */
+.sheet header .backbtn { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; max-width: 44%; padding: 0 10px 0 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); color: var(--ink-d); font-weight: 600; font-size: 13px; }
+.sheet header .backbtn svg { fill: currentColor; flex: none; }
+.sheet header .backbtn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet header .backbtn:hover { background: var(--btn); }
+@media (max-width: 420px) { .sheet header .backbtn span { display: none; } .sheet header .backbtn { padding: 0 8px; } }

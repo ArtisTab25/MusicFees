@@ -32,6 +32,7 @@ const P: Record<string, string> = {
   play: "M7 4v16l13-8z",
   pause: "M6 4h4v16H6zm8 0h4v16h-4z",
   prev: "M6 5h2v14H6zm3 7 10-7v14z",
+  back: "M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z",
   next: "M16 5h2v14h-2zM5 5l10 7-10 7z",
   home: "M12 3 2 12h3v8h5v-6h4v6h5v-8h3z",
   undo: "M12.5 8c-2.6 0-5 1-6.9 2.6L2 7v9h9l-3.6-3.6c1.4-1.2 3.1-1.9 5.1-1.9 3.5 0 6.5 2.3 7.6 5.5l2.4-.8C21.1 11 17.2 8 12.5 8z",
