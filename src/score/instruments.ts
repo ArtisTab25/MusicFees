@@ -12,7 +12,7 @@ export interface Preset {
   /** Mostrar notación además de tablatura. */
   notation?: boolean;
   /** Clave para pistas sin tablatura: G o F. */
-  clef?: "G" | "F";
+  clef?: "G" | "F" | "C3";
   /** Transposición escrita (la guitarra se escribe una octava arriba). */
   transpose?: number;
   /** Para baterías: piezas del kit (ids de articulación de alphaTab). */
@@ -105,13 +105,13 @@ export const PRESETS: Preset[] = [
   { id: "mandolin", name: "Mandolina", group: "Guitarras", kind: "tab", program: 25, tuning: T.mandolin.strings, notation: true },
   { id: "banjo", name: "Banjo", group: "Guitarras", kind: "tab", program: 105, tuning: T.banjo.strings, notation: true, transpose: 12 },
   // Bajos
-  { id: "bass_finger", name: "Bajo eléctrico (dedos)", group: "Bajos", kind: "tab", program: 33, tuning: T.bass4.strings, notation: true, transpose: 12 },
-  { id: "bass_pick", name: "Bajo con púa", group: "Bajos", kind: "tab", program: 34, tuning: T.bass4.strings, notation: true, transpose: 12 },
-  { id: "bass_slap", name: "Bajo slap", group: "Bajos", kind: "tab", program: 36, tuning: T.bass4.strings, notation: true, transpose: 12 },
-  { id: "bass_fretless", name: "Bajo sin trastes", group: "Bajos", kind: "tab", program: 35, tuning: T.bass4.strings, notation: true, transpose: 12 },
-  { id: "bass_5", name: "Bajo 5 cuerdas", group: "Bajos", kind: "tab", program: 33, tuning: T.bass5.strings, notation: true, transpose: 12 },
-  { id: "tololoche", name: "Tololoche / contrabajo", group: "Bajos", kind: "tab", program: 32, tuning: T.bass4.strings, notation: true, transpose: 12 },
-  { id: "guitarron", name: "Guitarrón", group: "Bajos", kind: "tab", program: 32, tuning: T.guitarron.strings, notation: true, transpose: 12 },
+  { id: "bass_finger", name: "Bajo eléctrico (dedos)", group: "Bajos", kind: "tab", program: 33, tuning: T.bass4.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "bass_pick", name: "Bajo con púa", group: "Bajos", kind: "tab", program: 34, tuning: T.bass4.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "bass_slap", name: "Bajo slap", group: "Bajos", kind: "tab", program: 36, tuning: T.bass4.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "bass_fretless", name: "Bajo sin trastes", group: "Bajos", kind: "tab", program: 35, tuning: T.bass4.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "bass_5", name: "Bajo 5 cuerdas", group: "Bajos", kind: "tab", program: 33, tuning: T.bass5.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "tololoche", name: "Tololoche / contrabajo", group: "Bajos", kind: "tab", program: 32, tuning: T.bass4.strings, notation: true, transpose: 12, clef: "F" },
+  { id: "guitarron", name: "Guitarrón", group: "Bajos", kind: "tab", program: 32, tuning: T.guitarron.strings, notation: true, transpose: 12, clef: "F" },
   { id: "synbass", name: "Bajo de sintetizador", group: "Bajos", kind: "notation", program: 38, clef: "F" },
   { id: "synbass2", name: "Bajo sinte (808/sub)", group: "Bajos", kind: "notation", program: 39, clef: "F" },
   // Teclados
@@ -129,7 +129,7 @@ export const PRESETS: Preset[] = [
   { id: "marimba", name: "Marimba", group: "Teclados", kind: "notation", program: 12, clef: "G" },
   // Cuerdas y voces
   { id: "violin", name: "Violín", group: "Cuerdas y voces", kind: "notation", program: 40, clef: "G" },
-  { id: "viola", name: "Viola", group: "Cuerdas y voces", kind: "notation", program: 41, clef: "G" },
+  { id: "viola", name: "Viola", group: "Cuerdas y voces", kind: "notation", program: 41, clef: "C3" },
   { id: "cello", name: "Chelo", group: "Cuerdas y voces", kind: "notation", program: 42, clef: "F" },
   { id: "strings", name: "Ensamble de cuerdas", group: "Cuerdas y voces", kind: "notation", program: 48, clef: "G" },
   { id: "strings_slow", name: "Cuerdas lentas", group: "Cuerdas y voces", kind: "notation", program: 49, clef: "G" },

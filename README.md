@@ -47,6 +47,13 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.6: claves y transposición según cada instrumento
+
+- Batería y percusión: clave neutra (antes salía clave de sol); las canciones ya guardadas se corrigen al abrirlas.
+- Bajo eléctrico, bajo de 5, tololoche y guitarrón: la partitura sobre la tablatura va en clave de Fa (escrita una octava arriba de como suena, como se acostumbra).
+- Viola: clave de Do en 3.ª.
+- Ukulele y mandolina se escriben como suenan (antes una octava arriba, como la guitarra); guitarra, requinto, vihuela, bajo sexto y banjo siguen escritos una octava arriba.
+
 ## Versión 1.4.5: cualquier kit acepta batería y percusión latina
 
 - En una batería normal se pueden escribir congas, bongós, timbales, güiro, maracas, claves, shaker, triángulo…; y en «Percusión latina», bombo, caja, hi-hat, toms y platillos. La pieza que el kit no tenía se agrega a la pista al usarla (también desde un teclado o pad MIDI).

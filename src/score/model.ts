@@ -407,8 +407,13 @@ function finishTrack(track: Track, p: Preset) {
     const beat = st.bars[0].voices[0].beats[0];
     for (const n of beat.notes.slice()) beat.removeNote(n);
   }
-  if (p.kind === "notation" && p.clef === "F") for (const bar of st.bars) bar.clef = M.Clef.F4;
-  if (p.transpose) st.displayTranspositionPitch = -p.transpose;
+  // Claves según la convención de cada instrumento: percusión neutra, bajos en Fa (también la
+  // notación del bajo eléctrico, que se escribe una octava arriba), viola en Do en 3.ª.
+  const clef = p.kind === "drums" ? M.Clef.Neutral : p.clef === "F" ? M.Clef.F4 : p.clef === "C3" ? M.Clef.C3 : undefined;
+  if (clef !== undefined) for (const bar of st.bars) bar.clef = clef;
+  // Guitarra, requinto, banjo y bajos se escriben una octava arriba de como suenan; ukulele y
+  // mandolina, como suenan (alphaTex pone -12 a toda tablatura: aquí se corrige).
+  if (p.kind !== "drums") st.displayTranspositionPitch = -(p.transpose ?? 0);
   (track as unknown as { __preset?: string }).__preset = p.id;
 }
 
@@ -1022,6 +1027,8 @@ function evenVoices(score: Score) {
   }
 }
 export function finishScore(score: Score) {
+  // Percusión siempre con clave neutra (canciones creadas antes de 1.4.6 traían clave de sol).
+  for (const t of score.tracks) for (const st of t.staves) if (st.isPercussion) for (const bar of st.bars) if (bar.clef !== M.Clef.Neutral) bar.clef = M.Clef.Neutral;
   evenVoices(score);
   renumberIds(score);
   score.finish(settings);
