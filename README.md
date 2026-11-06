@@ -47,6 +47,11 @@ Menú → Sonido → Activar efectos (o Masterizado). Usa spessasynth (Apache-2.
 
 Todo se guarda con la canción.
 
+## Versión 1.4.4: la batería ya no sale en silencios
+
+- Causa (encontrada con los datos de una transcripción real desde el teléfono): con el kit «Percusión latina» la pista no tenía bombo, caja, hi-hat ni platillos, y las notas que no tenían pieza en el kit se descartaban: 1400 golpes → 0 en la partitura, solo silencios con el ritmo. Ahora, si el kit no tiene una pieza, se agrega la pieza GM (con su línea y cabeza del pentagrama de percusión) en vez de perder la nota. Vale también al pegar entre kits distintos.
+- No dependía de la sensibilidad.
+
 ## Versión 1.4.3: la transcripción ya no se pierde
 
 - **Se guarda en cuanto termina:** si «Crear la canción» falla por memoria o el teléfono cierra la página, en Transcribir audio aparece «Última transcripción → Abrir resultado» para crearla sin volver a esperar.

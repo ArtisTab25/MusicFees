@@ -359,7 +359,10 @@ function clipToBeat(track: Track, cb: ClipBeat): Beat {
     const n = new M.Note();
     if (kind === "drums") {
       if (cn.drum == null) continue;
-      const idx = track.percussionArticulations.findIndex((a) => a.outputMidiNumber === cn.drum);
+      let idx = track.percussionArticulations.findIndex((a) => a.outputMidiNumber === cn.drum);
+      // El kit de la pista no tiene esa pieza (p. ej. bombo o caja en «Percusión latina», o al pegar entre
+      // kits): se agrega la pieza GM en vez de perder la nota (antes la batería salía en puros silencios).
+      if (idx < 0) idx = addGmPiece(track, cn.drum);
       if (idx < 0) continue;
       n.percussionArticulation = idx;
     } else if (kind === "tab") {
@@ -625,6 +628,25 @@ export function noteFxState(n: Note, fx: NoteFx): boolean {
     case "staccato": return n.isStaccato;
     case "tie": return n.isTieDestination;
   }
+}
+
+// Piezas GM (pentagrama de percusión de Guitar Pro): [nombre, línea, cabeza]  x = cruz, o = cruz con círculo, n = normal
+const GM_PIECES: Record<number, [string, number, "n" | "x" | "o"]> = {
+  35: ["Acoustic Kick Drum", 8, "n"], 36: ["Kick Drum", 7, "n"], 37: ["Snare", 3, "x"], 38: ["Snare", 3, "n"], 39: ["Hand Clap", 3, "n"], 40: ["Electric Snare", 3, "n"],
+  41: ["Very Low Floor Tom", 5, "n"], 42: ["Charley", -1, "x"], 43: ["Tom Very Low", 6, "n"], 44: ["Charley", 9, "x"], 45: ["Tom Low", 5, "n"], 46: ["Charley", -1, "o"],
+  47: ["Tom Medium", 4, "n"], 48: ["Tom High", 2, "n"], 49: ["Crash High", -2, "x"], 50: ["Tom Very High", 1, "n"], 51: ["Ride", 0, "x"], 52: ["China", -3, "x"],
+  53: ["Ride", 0, "o"], 55: ["Splash", -2, "x"], 57: ["Crash Medium", -1, "x"], 59: ["Ride", 0, "x"],
+};
+function addGmPiece(track: Track, midi: number): number {
+  const g = GM_PIECES[midi] ?? ["Percussion", 3, "x"];
+  const F = at.model.MusicFontSymbol;
+  const a = new at.model.InstrumentArticulation();
+  a.elementType = g[0]; a.staffLine = g[1]; a.outputMidiNumber = midi;
+  const head = g[2] === "n" ? [F.NoteheadBlack, F.NoteheadHalf, F.NoteheadWhole] : g[2] === "o" ? [F.NoteheadCircleX, F.NoteheadCircleX, F.NoteheadCircleX] : [F.NoteheadXBlack, F.NoteheadXBlack, F.NoteheadXBlack];
+  [a.noteHeadDefault, a.noteHeadHalf, a.noteHeadWhole] = head;
+  a.id = Math.max(-1, ...track.percussionArticulations.map((x) => x.id)) + 1;
+  track.percussionArticulations.push(a);
+  return track.percussionArticulations.length - 1;
 }
 
 /** Aplica una operación. Devuelve false si no se pudo (referencia inválida). */
