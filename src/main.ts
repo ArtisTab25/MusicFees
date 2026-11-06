@@ -454,22 +454,30 @@ function drumPad(tr: at.model.Track, beat: at.model.Beat | null) {
   });
   const label = (m: number) => names.get(m) ?? EXTRA_NAMES[m] ?? tr.percussionArticulations[byMidi.get(m)!]?.elementType ?? `Nota ${m}`;
   const key = (m: number) => {
-    const idx = byMidi.get(m)!;
     const midiOn = !!beat?.notes.some((n) => tr.percussionArticulations[n.percussionArticulation]?.outputMidiNumber === m);
-    return h("button", { class: "sbtn dkey", "aria-pressed": midiOn, title: label(m), onclick: () => ed.togglePerc(idx) }, label(m));
+    return h("button", { class: "sbtn dkey", "aria-pressed": midiOn, title: label(m), onclick: () => ed.togglePerc(m) }, label(m));
   };
   const placed = new Set<number>();
-  for (const [group, list] of DRUM_GROUPS) {
-    const keys = list.filter((m) => byMidi.has(m));
+  // Cualquier kit acepta todas las piezas (si la pista no la tenía, se agrega al usarla): a la vista las
+  // básicas del kit de la pista y las que ya usa la canción; todas con «Más piezas».
+  const latinIds = LATIN_PIECES.map((p) => p.id);
+  const isLatin = latinIds.filter((m) => byMidi.has(m)).length > byMidi.size / 2;
+  const basic = [36, 38, 37, 42, 46, 44, 50, 48, 45, 43, 49, 57, 51];
+  const groups: [string, number[]][] = isLatin ? [["Percusión latina", latinIds], ...DRUM_GROUPS] : [...DRUM_GROUPS, ["Percusión latina", latinIds]];
+  for (const [group, list] of groups) {
+    const keys = list.filter((m) => !placed.has(m) && (byMidi.has(m) || drumMore || (isLatin ? group === "Percusión latina" : basic.includes(m))));
     if (!keys.length) continue;
     keys.forEach((m) => placed.add(m));
     ctxStrip.append(h("div", { class: "dgroup" }, h("span", null, group), ...keys.map(key)));
   }
+  const allPieces = new Set([...DRUM_GROUPS.flatMap(([, l]) => l), ...LATIN_PIECES.map((p) => p.id)]);
+  const hidden = [...allPieces].filter((m) => !placed.has(m)).length;
   const rest = [...byMidi.keys()].filter((m) => !placed.has(m)).sort((a, b) => (used.get(byMidi.get(b)!) ?? 0) - (used.get(byMidi.get(a)!) ?? 0) || a - b);
   const restUsed = rest.filter((m) => used.has(byMidi.get(m)!));
   const shown = drumMore ? rest : restUsed;
   if (shown.length) ctxStrip.append(h("div", { class: "dgroup" }, h("span", null, "Percusión"), ...shown.map(key)));
-  if (rest.length > restUsed.length) ctxStrip.append(h("button", { class: "sbtn dmore", onclick: () => { drumMore = !drumMore; renderCtx(); } }, drumMore ? "Menos piezas" : `Más piezas (${rest.length - restUsed.length})`));
+  const more = drumMore ? 0 : hidden + rest.length - restUsed.length;
+  if (drumMore || more > 0) ctxStrip.append(h("button", { class: "sbtn dmore", onclick: () => { drumMore = !drumMore; renderCtx(); } }, drumMore ? "Menos piezas" : `Más piezas (${more})`));
 }
 
 // ---------- cursor sobre la partitura ----------

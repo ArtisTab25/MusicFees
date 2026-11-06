@@ -327,15 +327,20 @@ export class Editor {
     this.commit(ops);
     if (on) { const n = this.beat?.notes.find((x) => x.realValue === midi); if (n) this.engine.playNote(n); }
   }
-  togglePerc(articulationIndex: number) {
+  /** Pone o quita una pieza de percusión por su nota MIDI. La pista la agrega si su kit no la tenía
+   *  (cualquier kit acepta batería y percusión latina). */
+  togglePerc(midi: number) {
     const b = this.beat;
     if (!b) return;
-    const on = !b.notes.some((n) => n.percussionArticulation === articulationIndex);
+    const arts = this.track.percussionArticulations;
+    const on = !b.notes.some((n) => arts[n.percussionArticulation]?.outputMidiNumber === midi);
+    const idx = arts.findIndex((a) => a.outputMidiNumber === midi);
     const ops: Op[] = [];
     if (on && b.isRest && b.voice.beats.length === 1 && b.duration !== this.curDur) ops.push({ k: "dur", ...this.ref(), dur: this.curDur });
-    ops.push({ k: "perc", ...this.ref(), art: articulationIndex, on });
+    if (!on) for (const n of b.notes) { if (arts[n.percussionArticulation]?.outputMidiNumber === midi) ops.push({ k: "perc", ...this.ref(), art: n.percussionArticulation, on: false }); }
+    else ops.push({ k: "perc", ...this.ref(), art: idx, on: true, midi });
     this.commit(ops);
-    if (on) { const n = this.beat?.notes.find((x) => x.percussionArticulation === articulationIndex); if (n) this.engine.playNote(n); }
+    if (on) { const n = this.beat?.notes.find((x) => this.track.percussionArticulations[x.percussionArticulation]?.outputMidiNumber === midi); if (n) this.engine.playNote(n); }
   }
   /** Borrar: quita la nota de la cuerda; si el tiempo ya estaba vacío lo elimina y retrocede. */
   backspace() {

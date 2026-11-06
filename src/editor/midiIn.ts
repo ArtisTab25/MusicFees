@@ -50,8 +50,8 @@ export function stopMidi() {
 function writeChord(ed: Editor, notes: number[], say: (m: string) => void) {
   const kind = ed.kind;
   if (kind === "drums") {
-    const arts = ed.track.percussionArticulations;
-    for (const n of notes) { const idx = arts.findIndex((a) => a.outputMidiNumber === n); if (idx >= 0) ed.togglePerc(idx); }
+    // Teclado o pad MIDI: cualquier pieza GM entra en cualquier kit (si falta, se agrega).
+    for (const n of notes) if (n >= 27 && n <= 87) ed.togglePerc(n);
     return;
   }
   if (kind === "notation") { for (const n of notes) ed.togglePitch(n); return; }

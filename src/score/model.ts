@@ -18,7 +18,7 @@ export type NoteKey = { str?: number; pitch?: number; art?: number };
 export type Op =
   | ({ k: "fret"; str: number; fret: number; len?: number } & BeatRef)
   | ({ k: "pitch"; pitch: number; on: boolean } & BeatRef)
-  | ({ k: "perc"; art: number; on: boolean } & BeatRef)
+  | ({ k: "perc"; art: number; on: boolean; midi?: number } & BeatRef)
   | ({ k: "delNote" } & BeatRef & NoteKey)
   | ({ k: "insBeat"; dur: number; dots?: number } & Omit<BeatRef, "i"> & { after: number })
   | ({ k: "delBeat" } & BeatRef)
@@ -636,6 +636,12 @@ const GM_PIECES: Record<number, [string, number, "n" | "x" | "o"]> = {
   41: ["Very Low Floor Tom", 5, "n"], 42: ["Charley", -1, "x"], 43: ["Tom Very Low", 6, "n"], 44: ["Charley", 9, "x"], 45: ["Tom Low", 5, "n"], 46: ["Charley", -1, "o"],
   47: ["Tom Medium", 4, "n"], 48: ["Tom High", 2, "n"], 49: ["Crash High", -2, "x"], 50: ["Tom Very High", 1, "n"], 51: ["Ride", 0, "x"], 52: ["China", -3, "x"],
   53: ["Ride", 0, "o"], 55: ["Splash", -2, "x"], 57: ["Crash Medium", -1, "x"], 59: ["Ride", 0, "x"],
+  // percusión latina y menor (líneas como en el pentagrama de percusión de Guitar Pro)
+  54: ["Tambourine", -1, "x"], 56: ["Cowbell", 1, "x"], 58: ["Vibraslap", -2, "x"], 60: ["Hi Bongo", 1, "n"], 61: ["Low Bongo", 2, "n"],
+  62: ["Mute Hi Conga", 3, "x"], 63: ["Open Hi Conga", 4, "n"], 64: ["Low Conga", 5, "n"], 65: ["High Timbale", 2, "n"], 66: ["Low Timbale", 3, "n"],
+  67: ["High Agogo", 0, "n"], 68: ["Low Agogo", 1, "n"], 69: ["Cabasa", -1, "x"], 70: ["Maracas", -1, "x"], 73: ["Short Guiro", 0, "x"],
+  74: ["Long Guiro", 0, "o"], 75: ["Claves", 1, "x"], 76: ["Hi Wood Block", 0, "n"], 77: ["Low Wood Block", 1, "n"], 81: ["Open Triangle", -2, "o"],
+  80: ["Mute Triangle", -2, "x"], 82: ["Shaker", -1, "x"], 85: ["Castanets", 0, "x"], 86: ["Mute Surdo", 6, "x"], 87: ["Open Surdo", 6, "n"],
 };
 function addGmPiece(track: Track, midi: number): number {
   const g = GM_PIECES[midi] ?? ["Percussion", 3, "x"];
@@ -708,10 +714,17 @@ export function applyOp(score: Score, op: Op): Score {
     case "perc": {
       const beat = beatAt(score, op);
       if (!beat) break;
-      const ex = beat.notes.find((x) => x.percussionArticulation === op.art);
+      // Pieza por nota MIDI (cualquier kit acepta cualquier pieza): si la pista no la tiene, se agrega.
+      let art = op.art;
+      if (op.midi != null) {
+        const tr = beat.voice.bar.staff.track;
+        art = tr.percussionArticulations.findIndex((a) => a.outputMidiNumber === op.midi);
+        if (art < 0) art = addGmPiece(tr, op.midi);
+      }
+      const ex = beat.notes.find((x) => x.percussionArticulation === art);
       if (op.on && !ex) {
         const n = new M.Note();
-        n.percussionArticulation = op.art;
+        n.percussionArticulation = art;
         beat.addNote(n);
         beat.isEmpty = false;
       } else if (!op.on && ex) beat.removeNote(ex);
